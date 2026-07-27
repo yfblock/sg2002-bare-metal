@@ -12,6 +12,7 @@ mod util;
 mod panic;
 mod logger;
 mod jpu;
+mod stats;
 mod yuv_buf;
 
 use sg200x_bsp::usb::class::uvc;
@@ -45,6 +46,8 @@ extern "C" fn rust_main() -> ! {
     logger::init();
     uart::print("=== C906L UVC+JPU start ===\n");
     mailbox::write(0, 0, 0);
+    stats::init();
+    jpu::init_trace();
     platform::platform_init();
     // 尽早启用 M-mode 外部中断 + PLIC source 61（MBOX_INT_C906_2ND）：
     // UVC 枚举要几十秒，放在它后面会把开机初期大核发来的消息全丢掉。
@@ -68,8 +71,13 @@ extern "C" fn rust_main() -> ! {
     let _ = uvc::uvc_capture_one_frame(dev, ep0, &sel);
     let mut frame_count: u32 = 0;
     loop {
+        stats::inc_loop();
+        stats::set_time_lo();
+        stats::set_stage(stats::stage::CAPTURE);
         match uvc::uvc_capture_one_frame(dev, ep0, &sel) {
             Ok(n) => {
+                stats::inc_cap_ok();
+                stats::set_stage(stats::stage::GOT_FRAME);
                 frame_count = frame_count.wrapping_add(1);
                 // 取本帧 MJPEG 字节（sg200x-bsp 在 DMA_BUF 组装好的 JPEG）。
                 let jpeg = match dwc2::dma_rx_slice(uvc::UVC_ASSEMBLED_JPEG_DMA_OFF, n) {
@@ -82,8 +90,12 @@ extern "C" fn rust_main() -> ! {
                         continue;
                     }
                 };
-                match jpu::decode_to_shared(jpeg) {
+                stats::set_stage(stats::stage::DECODE);
+                let decoded = jpu::decode_to_shared(jpeg);
+                stats::set_stage(stats::stage::NOTIFY);
+                match decoded {
                     Ok((w, h, len)) => {
+                        stats::inc_jpu_ok();
                         // 报告的 yuv_size 受共享缓冲容量裁剪（write_yuv 同样裁剪）。
                         let reported = len.min(yuv_buf::YUV_BUF_MAX);
                         let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
@@ -92,6 +104,7 @@ extern "C" fn rust_main() -> ! {
                         mailbox::notify(frame_count, reported as u32, flags);
                     }
                     Err(_) => {
+                        stats::inc_jpu_err();
                         // 解码失败（JPU 已在 decode_to_shared 内复位重建）。
                         // 仅通知 MJPEG 大小，不置 YUV_READY；下一帧重试。
                         let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
@@ -99,8 +112,14 @@ extern "C" fn rust_main() -> ! {
                         mailbox::notify(frame_count, n as u32, flags);
                     }
                 }
+                stats::set_stage(stats::stage::DONE);
             }
-            Err(_) => {}
+            // 抓帧失败：以前这里是空的 `{}`，既不 notify 也不计数，一旦持续失败
+            // 就表现为 frame_count 冻结且串口毫无输出，完全无法定位。至少要计数。
+            Err(_) => {
+                stats::inc_cap_err();
+                stats::set_stage(stats::stage::DONE);
+            }
         }
     }
 }
