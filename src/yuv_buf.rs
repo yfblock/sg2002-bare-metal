@@ -16,6 +16,14 @@ pub const YUV_BUF_PA: usize = 0x8FE8_8000;
 /// （完整 YUV422 传输可后续放大缓冲或大核侧改读 yuv_size。）
 pub const YUV_BUF_MAX: usize = 460800;
 
+/// 共享 YUV 区的**物理容量**：`YUV_BUF_PA` 到 JPU pool(0x8FF1E000) 之间，正好
+/// 614400 字节 = 640x480 YUV422 一整帧。
+///
+/// 和 `YUV_BUF_MAX` 的区别：这个是缓冲真实能装多少（JPU 直接 DMA 进来的上限），
+/// `YUV_BUF_MAX` 只是上报给大核的裁剪值（保持 yuv-fps 工具的既有行为）。
+/// 之前把 JPU 输出按 460800 给会直接报 "output buffer too small"。
+pub const YUV_BUF_CAP: usize = 614400;
+
 /// 把 YUV 数据拷到共享缓冲区（小核 identity 映射，直接写 PA）。
 pub fn write_yuv(src: &[u8]) {
     let n = src.len().min(YUV_BUF_MAX);

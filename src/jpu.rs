@@ -50,6 +50,15 @@ static DECODER: SyncUnsafeCell<Option<JpuDecoder>> = SyncUnsafeCell::new(None);
 /// JPU 复位次数（wedge 自恢复计数），供日志节流与压力测试观测。
 static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
 
+/// `write_yuv`（把 JPU 输出搬到共享缓冲）的累计耗时，ticks。
+static WRITE_TICKS: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(0);
+
+/// 取走并清零 `write_yuv` 累计耗时。
+pub fn take_write_ticks() -> u64 {
+    WRITE_TICKS.swap(0, Ordering::Relaxed)
+}
+
 fn identity_dma(v: usize) -> usize {
     v
 }
@@ -64,14 +73,20 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
     // SAFETY: 小核 identity 映射（VA=PA），pool 在预留 rtos 区（普通 DRAM，JPU DMA
     // 可达，32 位地址不需 VD_REMAP）；JPU/TOP/VC 为物理 MMIO 基址，identity 下直访。
     unsafe {
-        JpuDecoder::new_at_no_vd_remap_with_pool(
+        let mut d = JpuDecoder::new_at_no_vd_remap_with_pool(
             JPU_REG_BASE,
             TOP_BASE,
             VC_REG_BASE,
             identity_dma,
             JPU_POOL_PA,
             JPU_POOL_SIZE,
-        )
+        )?;
+        // 让 JPU 直接解码到共享 YUV 缓冲：省掉整帧 memcpy（实测 34ms/帧，
+        // 占整帧 56%）。小核之后不再读这块数据（大核用非缓存映射读），
+        // 所以也可以跳过两次 dcache 维护（各 5.8ms）。
+        d.set_output_buffer(yuv_buf::YUV_BUF_PA, yuv_buf::YUV_BUF_CAP);
+        d.set_cpu_reads_output(false);
+        Ok(d)
     }
 }
 
@@ -99,9 +114,8 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
     let decoder = cell.as_mut().expect("decoder present");
     match decoder.decode(jpeg) {
         Ok(result) => {
-            let len = result.yuv_data.len();
-            yuv_buf::write_yuv(result.yuv_data);
-            Ok((result.width, result.height, len))
+            // 数据已由 JPU 直接 DMA 进共享缓冲，无需再搬。
+            Ok((result.width, result.height, result.yuv_data.len()))
         }
         Err(e) => {
             // wedge / 解码错误：drop 旧 decoder 并重建（重跑硬件 init + 软复位）。

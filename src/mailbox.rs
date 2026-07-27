@@ -49,6 +49,20 @@ pub fn decode_slot(flags: u32) -> u32 {
     (flags >> 14) & 1
 }
 
+/// 把 DRAM 邮箱那几行 cache 写回内存。
+///
+/// **必须显式做**：小核是带 cache 的 identity 映射，`write_volatile` 只保证不被
+/// 编译器优化掉，不保证出 cache。之前能工作纯属侥幸——JPU 每帧两次
+/// `dcache_invalidate_range`(614400 B) 远大于 L1 D-cache，顺带把邮箱的脏行
+/// 也挤回了 DRAM；一旦去掉那两次 invalidate，大核就只能读到全 0。
+#[inline]
+fn flush_mailbox() {
+    sg200x_bsp::utils::cache::dcache_clean_range(
+        MAILBOX_PA,
+        core::mem::size_of::<Mailbox>(),
+    );
+}
+
 const HW_MBOX_BASE: usize = 0x0190_0000;
 const HW_MBOX_CONTEXT: usize = HW_MBOX_BASE + 0x400;
 /// 接收方 CPU 编号（cvi_mailbox.h）：0=CA53, 1=C906B(大核), 2=C906L(小核)。
@@ -76,6 +90,8 @@ pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
         core::ptr::write_volatile(p.add(3), flags);
         // magic 最后写：大核以 magic 作为"这块内容有效"的判据
         core::ptr::write_volatile(p.add(0), MAILBOX_MAGIC);
+
+        flush_mailbox();
 
         let ctx = (HW_MBOX_CONTEXT + SLOT * 8) as *mut u32;
         core::ptr::write_volatile(ctx.add(0), frame_count);
@@ -137,6 +153,7 @@ pub fn write_reply(msg: u32) {
         // magic 最后写，作为有效标志
         core::ptr::write_volatile(p.add(4), REPLY_MAGIC);
     }
+    flush_mailbox();
 }
 
 /// 初始化存活标记。
@@ -152,4 +169,5 @@ pub fn write(frame_count: u32, yuv_size: u32, flags: u32) {
         _pad: 0,
     };
     unsafe { core::ptr::write_volatile(MAILBOX_PA as *mut Mailbox, mb) };
+    flush_mailbox();
 }

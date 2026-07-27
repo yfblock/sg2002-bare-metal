@@ -60,6 +60,13 @@ fn ptr() -> *mut u32 {
     STATS_PA as *mut u32
 }
 
+/// 把统计块写回 DRAM。理由同 `mailbox::flush_mailbox`——带 cache 的 identity
+/// 映射下，不显式 clean 大核就读不到（之前靠 JPU 的大范围 invalidate 侥幸生效）。
+#[inline]
+fn flush() {
+    sg200x_bsp::utils::cache::dcache_clean_range(STATS_PA, 12 * 4);
+}
+
 /// 清零并打上 magic。
 pub fn init() {
     unsafe {
@@ -69,6 +76,7 @@ pub fn init() {
         }
         core::ptr::write_volatile(p.add(0), STATS_MAGIC);
     }
+    flush();
 }
 
 /// 逐字段写，避免整结构 RMW（和邮箱同理，别互相覆盖）。
@@ -80,6 +88,7 @@ macro_rules! bump {
                 let p = ptr().add($idx);
                 core::ptr::write_volatile(p, core::ptr::read_volatile(p).wrapping_add(1));
             }
+            flush();
         }
     };
 }
@@ -91,16 +100,29 @@ bump!(inc_jpu_ok, 4);
 bump!(inc_jpu_err, 5);
 bump!(inc_jpu_reset, 6);
 
+/// `rdtime` 计数频率（SG2002 = 25MHz，实测 25.005MHz）。
+pub const TIMEBASE_HZ: u64 = 25_000_000;
+
+/// 读 64 位 `rdtime`。
+#[inline]
+pub fn rdtime() -> u64 {
+    let t: usize;
+    unsafe { core::arch::asm!("rdtime {0}", out(reg) t, options(nomem, nostack)) };
+    t as u64
+}
+
 /// 记录 `rdtime` 低 32 位（标定 timebase 用）。
 #[inline]
 pub fn set_time_lo() {
     let t: usize;
     unsafe { core::arch::asm!("rdtime {0}", out(reg) t, options(nomem, nostack)) };
     unsafe { core::ptr::write_volatile(ptr().add(9), t as u32) };
+    flush();
 }
 
 /// 记录当前阶段。
 #[inline]
 pub fn set_stage(s: u32) {
     unsafe { core::ptr::write_volatile(ptr().add(7), s) };
+    flush();
 }
