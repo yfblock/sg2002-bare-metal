@@ -11,8 +11,10 @@ use crate::uart;
 
 const HW_MBOX_BASE: usize = 0x0190_0000;
 const HW_MBOX_CTX: usize = HW_MBOX_BASE + 0x400;
-const RECEIVE_CPU: usize = 2; // C906L
-const SLOT: usize = 0;
+const RECEIVE_CPU: usize = 2; // C906L 小核自己——邮箱寄存器索引 = 接收方 CPU
+/// 大核→小核用 slot 1（小核→大核用 slot 0，见 mailbox.rs SLOT）。
+/// 两个方向必须错开 slot：`mbox_set` 是全局寄存器，同 slot 会互相触发+覆盖 payload。
+const SLOT_B2S: usize = 1;
 
 /// RV64: Machine External Interrupt = bit63 + code 11 = 0x8000_0000_0000_000b。
 const CAUSE_M_EXTERNAL: usize = 0x8000_0000_0000_000b;
@@ -157,33 +159,29 @@ extern "C" fn rust_trap_handler(mcause: usize, cur_sp: usize) -> usize {
     cur_sp
 }
 
-/// 处理邮箱中断：读 HW 邮箱消息（大核发来的）→ 写 DRAM 邮箱回复 → 清 HW 邮箱。
+/// 处理邮箱中断：读大核发来的消息 → 回写 DRAM 邮箱 reply 字段 → 清 HW 邮箱。
 fn handle_mailbox_irq() {
     unsafe {
-        // 读 HW 邮箱 context slot 0（大核发来的 4B 消息）
-        let msg = read_volatile((HW_MBOX_CTX + SLOT * 8) as *const u32);
-        uart::print("[MB-RX] got big-core msg=");
-        uart::print_hex(msg as u64);
-        uart::print("\n");
+        // 读 HW 邮箱 context slot 1（大核发来的 4B 消息）
+        let msg = read_volatile((HW_MBOX_CTX + SLOT_B2S * 8) as *const u32);
 
-        // 清 HW 邮箱中断：清除 ALL pending slots（不只 SLOT=0），
-        // 否则 SLOT=1（小核→大核自触发）会留在 int_st 里导致中断风暴。
+        // 清 HW 邮箱中断：清掉 cpu_mbox_set[2] 上所有 pending bit + 关对应 en bit，
+        // 让邮箱控制器 deassert。不清就会被 level-triggered PLIC 无限重投。
         let int_val = read_volatile((HW_MBOX_BASE + 0x10 + RECEIVE_CPU * 16 + 8) as *const u32);
         if int_val != 0 {
-            // 清所有 pending bit
             write_volatile((HW_MBOX_BASE + 0x10 + RECEIVE_CPU * 16) as *mut u32, int_val);
-            // disable 所有 en bit
             let en = (HW_MBOX_BASE + RECEIVE_CPU * 4) as *mut u32;
             let old = read_volatile(en);
             write_volatile(en, old & !int_val);
-            // 只清 SLOT=0 的 context（大核消息）；SLOT=1 的 context 留给大核读
-            if int_val & (1 << SLOT) != 0 {
-                write_volatile((HW_MBOX_CTX + SLOT * 8) as *mut u64, 0);
-            }
         }
 
-        // 写 DRAM 邮箱回复（大核可读）：把大核的消息回显到 reply 字段
-        if int_val & (1 << SLOT) != 0 {
+        if int_val & (1 << SLOT_B2S) != 0 {
+            // 清掉 context slot，避免下次读到旧值
+            write_volatile((HW_MBOX_CTX + SLOT_B2S * 8) as *mut u64, 0);
+            uart::print("[MB-RX] big->small msg=");
+            uart::print_hex(msg as u64);
+            uart::print("\n");
+            // 回写 DRAM 邮箱 reply 字段，大核读回即证明往返成功
             mailbox::write_reply(msg);
         }
     }

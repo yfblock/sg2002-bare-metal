@@ -46,6 +46,10 @@ extern "C" fn rust_main() -> ! {
     uart::print("=== C906L UVC+JPU start ===\n");
     mailbox::write(0, 0, 0);
     platform::platform_init();
+    // 尽早启用 M-mode 外部中断 + PLIC source 61（MBOX_INT_C906_2ND）：
+    // UVC 枚举要几十秒，放在它后面会把开机初期大核发来的消息全丢掉。
+    // 小核收 61、大核收 101，两条线互不干扰（PLIC 每个 source 独立 pending）。
+    unsafe { trap::init(); }
     uvc::set_preferred_frame_size(640, 480);
     uvc::set_preferred_max_pixels(640 * 480);
     uvc::set_preferred_frame_interval(333_333);
@@ -62,8 +66,6 @@ extern "C" fn rust_main() -> ! {
     }
     uvc::uvc_start_video_stream(dev, ep0, &mut sel).expect("start stream");
     let _ = uvc::uvc_capture_one_frame(dev, ep0, &sel);
-    // 不调 trap::init()——小核不需要中断。不启用 PLIC source 61，
-    // 这样 mbox_set 触发的 source 61 只在大核 PLIC context 投递（大核独占）。
     let mut frame_count: u32 = 0;
     loop {
         match uvc::uvc_capture_one_frame(dev, ep0, &sel) {

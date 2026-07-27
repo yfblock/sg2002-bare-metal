@@ -56,23 +56,26 @@ const HW_MBOX_CONTEXT: usize = HW_MBOX_BASE + 0x400;
 /// 对应 PLIC source 101（dts `rtos_cmdqu interrupts=<101>`, riscv,ndev=101）。
 /// 参考 osdrv rtos_cmdqu.c `rtos_cmdqu_send()`: SEND_TO_CPU 索引 = 接收方。
 const TARGET_CPU: usize = 1; // C906B 大核
-const SLOT: usize = 0;
+/// 小核→大核用 slot 0；大核→小核用 slot 1（见 trap.rs SLOT_B2S）。
+///
+/// `mbox_set` 是**全局**寄存器，由 `cpu_mbox_en[cpu]` 决定谁收。两个方向必须
+/// 用不同 slot：否则 A 方向置的 en bit 会让 B 方向的 mbox_set 也打到自己，
+/// 而且 0x400 的 context buffer 同一个 slot 会被对方覆盖。
+pub const SLOT: usize = 0;
 
 /// 写帧信息 + 触发 HW 邮箱中断通知大核。
+///
+/// 只写 offset 0..16（小核→大核那一半），**不要**整结构 RMW：
+/// reply 字段由中断上下文的 `write_reply` 写，整结构读改写会在
+/// "读 current → 写回" 之间把 ISR 刚写的 reply 覆盖掉（13 FPS 下必然丢）。
 pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
-    let current = unsafe { core::ptr::read_volatile(MAILBOX_PA as *const Mailbox) };
-    let mb = Mailbox {
-        magic: MAILBOX_MAGIC,
-        frame_count,
-        yuv_size,
-        flags,
-        reply_magic: current.reply_magic,
-        reply_data: current.reply_data,
-        reply_seq: current.reply_seq,
-        _pad: 0,
-    };
     unsafe {
-        core::ptr::write_volatile(MAILBOX_PA as *mut Mailbox, mb);
+        let p = MAILBOX_PA as *mut u32;
+        core::ptr::write_volatile(p.add(1), frame_count);
+        core::ptr::write_volatile(p.add(2), yuv_size);
+        core::ptr::write_volatile(p.add(3), flags);
+        // magic 最后写：大核以 magic 作为"这块内容有效"的判据
+        core::ptr::write_volatile(p.add(0), MAILBOX_MAGIC);
 
         let ctx = (HW_MBOX_CONTEXT + SLOT * 8) as *mut u32;
         core::ptr::write_volatile(ctx.add(0), frame_count);
@@ -122,15 +125,18 @@ pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
 }
 
 /// 写回复（小核 ISR 收到大核消息后调用）。
+///
+/// 只碰 offset 16..32（大核→小核那一半），和 `notify` 写的 0..16 完全不重叠，
+/// 所以中断上下文和主循环并发写也不会互相覆盖。
 pub fn write_reply(msg: u32) {
-    let current = unsafe { core::ptr::read_volatile(MAILBOX_PA as *const Mailbox) };
-    let mb = Mailbox {
-        reply_magic: REPLY_MAGIC,
-        reply_data: msg,
-        reply_seq: current.reply_seq.wrapping_add(1),
-        ..current
-    };
-    unsafe { core::ptr::write_volatile(MAILBOX_PA as *mut Mailbox, mb) };
+    unsafe {
+        let p = MAILBOX_PA as *mut u32;
+        let seq = core::ptr::read_volatile(p.add(6));
+        core::ptr::write_volatile(p.add(5), msg);
+        core::ptr::write_volatile(p.add(6), seq.wrapping_add(1));
+        // magic 最后写，作为有效标志
+        core::ptr::write_volatile(p.add(4), REPLY_MAGIC);
+    }
 }
 
 /// 初始化存活标记。
