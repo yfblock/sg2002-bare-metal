@@ -1,0 +1,11 @@
+[build]
+# 切到 riscv64gc：与 sg200x-bsp 的目标一致，且 C906L 是 rv64imafdc
+target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags = [
+    "-C", "link-arg=-Tmemory.ld",
+    "-C", "link-arg=--gc-sections",
+    "-C", "force-unwind-tables=no",
+    "-C", "link-arg=--no-relax",
+]
