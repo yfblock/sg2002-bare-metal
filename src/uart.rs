@@ -23,6 +23,9 @@ pub(crate) fn uart_putc(c: u8) {
 
 /// 打印字符串；`\n` 自动转成 `\r\n`（串口终端需要）。
 pub(crate) fn print(s: &str) {
+    if crate::control::muted() {
+        return;
+    }
     for &b in s.as_bytes() {
         if b == b'\n' {
             uart_putc(b'\r');
@@ -33,6 +36,9 @@ pub(crate) fn print(s: &str) {
 
 /// 打印 `0x` 前缀的 64 位十六进制。
 pub(crate) fn print_hex(v: u64) {
+    if crate::control::muted() {
+        return;
+    }
     print("0x");
     let mut started = false;
     for shift in (0..64).step_by(4).rev() {
@@ -46,6 +52,9 @@ pub(crate) fn print_hex(v: u64) {
 
 /// 打印 64 位十进制。
 pub(crate) fn print_dec(n: u64) {
+    if crate::control::muted() {
+        return;
+    }
     let mut buf = [0u8; 20];
     let mut i = buf.len();
     let mut n = n;

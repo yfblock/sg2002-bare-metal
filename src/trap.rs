@@ -126,15 +126,15 @@ pub unsafe fn init() {
     core::arch::asm!("csrs mstatus, {0}", in(reg) mie, options(nostack, preserves_flags));
 }
 
-/// Trap handler：处理 PLIC 外部中断 + 访问异常（打印诊断）。
+/// Trap handler：处理 PLIC 外部中断 + 定时器中断 + 访问异常。
 #[no_mangle]
 extern "C" fn rust_trap_handler(mcause: usize, cur_sp: usize) -> usize {
     if mcause == CAUSE_M_EXTERNAL {
         let src = plic::claim();
         if src == plic::MBOX_IRQ_SRC {
             handle_mailbox_irq();
-        } else if src != 0 {
-            plic::complete(src);
+        } else if src == plic::USB_IRQ_SRC {
+            sg200x_bsp::usb::host::dwc2::ep0::handle_usb_irq();
         }
         plic::complete(src);
     } else if mcause == CAUSE_LOAD_ACCESS || mcause == CAUSE_STORE_ACCESS {
@@ -178,9 +178,22 @@ fn handle_mailbox_irq() {
         if int_val & (1 << SLOT_B2S) != 0 {
             // 清掉 context slot，避免下次读到旧值
             write_volatile((HW_MBOX_CTX + SLOT_B2S * 8) as *mut u64, 0);
-            uart::print("[MB-RX] big->small msg=");
-            uart::print_hex(msg as u64);
-            uart::print("\n");
+
+            // 控制消息 0xF0_49_<cmd>_<arg>，见 control.rs。
+            if msg & 0xFFFF_0000 == 0xF049_0000 {
+                let cmd = (msg >> 8) & 0xFF;
+                let arg = msg & 0xFF;
+                match cmd {
+                    0x50 => crate::control::set_paused(arg != 0),
+                    0x56 => sg200x_bsp::ive::set_input_fmt(arg),
+                    0x57 => crate::control::set_muted(arg != 0),
+                    _ => {}
+                }
+            } else {
+                uart::print("[MB-RX] big->small msg=");
+                uart::print_hex(msg as u64);
+                uart::print("\n");
+            }
             // 回写 DRAM 邮箱 reply 字段，大核读回即证明往返成功
             mailbox::write_reply(msg);
         }

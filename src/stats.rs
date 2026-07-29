@@ -5,10 +5,10 @@
 //! 毫无输出，根本分不清是卡在 USB 抓帧还是 JPU 解码。UART0 又和大核共用，不能
 //! 靠小核刷日志。所以把计数器放共享 DRAM，由大核 `/dev/cvi-mailbox` 探针读出。
 //!
-//! 位置：`0x8FFFE040`，在邮箱（`0x8FFFE000`，32B）之后的空隙里，互不重叠。
+//! 位置：`0x9004_0040`，在邮箱（`0x9004_0000`，32B）之后的空隙里，互不重叠。
 
 /// 统计块物理地址（邮箱之后的空隙）。
-pub const STATS_PA: usize = 0x8FFF_E040;
+pub const STATS_PA: usize = 0x9004_0040;
 /// 有效标志 "STAT"。
 pub const STATS_MAGIC: u32 = 0x5354_4154;
 

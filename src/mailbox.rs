@@ -18,7 +18,7 @@ pub struct Mailbox {
     pub _pad: u32,
 }
 
-pub const MAILBOX_PA: usize = 0x8FFF_E000;
+pub const MAILBOX_PA: usize = 0x9004_0000;
 pub const MAILBOX_MAGIC: u32 = 0xC906_C906;
 pub const REPLY_MAGIC: u32 = 0x52504C59;
 
@@ -26,10 +26,14 @@ pub const REPLY_MAGIC: u32 = 0x52504C59;
 pub const FLAG_SOI: u32 = 1 << 0;
 pub const FLAG_EOI: u32 = 1 << 1;
 pub const FLAG_YUV_READY: u32 = 1 << 15;
-/// bit14：双缓冲 slot 索引（0/1）。
-pub const FLAG_SLOT: u32 = 1 << 14;
+/// bit2：双缓冲 slot 索引（0/1）。
+///
+/// 注意：**不能用 bit14**——`encode_dims` 的 height 字段占 bits 8-19，
+/// h=480(0x1E0) << 8 = 0x1E000，bit14 恰好为 1，会覆盖 slot 位。
+/// bit15 同理被 height 覆盖（但 FLAG_YUV_READY 恰好一直为 true，没暴露问题）。
+pub const FLAG_SLOT: u32 = 1 << 2;
 
-/// 把 width/height 编码到 flags 的高 16 位。
+/// 把 width/height 编码到 flags 的高位。
 pub fn encode_dims(w: u32, h: u32) -> u32 {
     ((w & 0xFFF) << 20) | ((h & 0xFFF) << 8)
 }
@@ -39,14 +43,14 @@ pub fn decode_dims(flags: u32) -> (u32, u32) {
     ((flags >> 20) & 0xFFF, (flags >> 8) & 0xFFF)
 }
 
-/// 把 slot 索引（0/1）编码到 flags bit14。
+/// 把 slot 索引（0/1）编码到 flags bit2。
 pub fn encode_slot(slot: u32) -> u32 {
-    (slot & 1) << 14
+    (slot & 1) << 2
 }
 
 /// 从 flags 解码 slot 索引。
 pub fn decode_slot(flags: u32) -> u32 {
-    (flags >> 14) & 1
+    (flags >> 2) & 1
 }
 
 /// 把 DRAM 邮箱那几行 cache 写回内存。
@@ -110,33 +114,6 @@ pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
 
         let mbox_set = (HW_MBOX_BASE + 0x60) as *mut u32;
         core::ptr::write_volatile(mbox_set, 1 << SLOT);
-
-        // 诊断（节流）：读回邮箱控制器寄存器，确认 mbox_set 是否生效。
-        // UART0 与大核共用——调试大核串口输出时置 false，避免互相截断。
-        const MB_DIAG: bool = false;
-        static DIAG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-        let n = DIAG.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        if MB_DIAG && n % 500 == 0 {
-            // CPU1 的 int_st(0x28), int_mask(0x24), int_raw(0x2c), en(0x04)
-            let int_st = core::ptr::read_volatile((HW_MBOX_BASE + 0x10 + TARGET_CPU * 16 + 8) as *const u32);
-            let int_mask = core::ptr::read_volatile((HW_MBOX_BASE + 0x10 + TARGET_CPU * 16 + 4) as *const u32);
-            let int_raw = core::ptr::read_volatile((HW_MBOX_BASE + 0x10 + TARGET_CPU * 16 + 12) as *const u32);
-            let en = core::ptr::read_volatile((HW_MBOX_BASE + TARGET_CPU * 4) as *const u32);
-            let mbox_status = core::ptr::read_volatile((HW_MBOX_BASE + 0x64) as *const u32);
-            crate::uart::print("[MB-diag] fc=");
-            crate::uart::print_hex(frame_count as u64);
-            crate::uart::print(" st=");
-            crate::uart::print_hex(int_st as u64);
-            crate::uart::print(" mask=");
-            crate::uart::print_hex(int_mask as u64);
-            crate::uart::print(" raw=");
-            crate::uart::print_hex(int_raw as u64);
-            crate::uart::print(" en=");
-            crate::uart::print_hex(en as u64);
-            crate::uart::print(" mstatus=");
-            crate::uart::print_hex(mbox_status as u64);
-            crate::uart::print("\n");
-        }
     }
 }
 

@@ -17,8 +17,8 @@
 //!   YUV slot0 [0x8FE00000, 0x8FE80000) 512K
 //!   YUV slot1 [0x8FE80000, 0x8FF00000) 512K
 //!   JPU pool  [0x8FF00000, 0x8FFE0000) 896K
-//!   (gap)     [0x8FFE0000, 0x8FFFE000) 64K
-//!   mailbox   [0x8FFFE000, 0x8FFFE020) 32B
+//!   (gap)     [0x8FFE0000, 0x90040000) 64K
+//!   mailbox   [0x90040000, 0x8FFFE020) 32B
 
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
@@ -29,11 +29,10 @@ use sg200x_bsp::soc::TOP_BASE;
 use crate::uart;
 use crate::yuv_buf;
 
-/// JPU DMA 内存池物理地址（rtos_region 内，YUV 缓冲之后，mailbox 之前）。
+/// JPU DMA 内存池物理地址。YUV 缓冲之后，避免重叠。
+/// YUV: 0x8FE88000 + 614400(0x96000) = 0x8FF1E000
 const JPU_POOL_PA: usize = 0x8FF1_E000;
-/// JPU DMA 内存池大小。stream_buf(256K) + frame_buf(640×480 YUV422≈614K) ≈ 864K，
-/// 896K (0xE0000) 留 2 页余量；[0x8FF1E000, 0x8FFFE000)，mailbox 紧随其后。
-const JPU_POOL_SIZE: usize = 0x000E_0000;
+const JPU_POOL_SIZE: usize = 0x0004_0000; // 256KB
 
 /// 裸机单核：JPU 仅在主循环访问，邮箱 ISR 不触碰 JPU。用 `UnsafeCell` 持有单例。
 struct SyncUnsafeCell<T>(UnsafeCell<T>);
@@ -81,17 +80,17 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
             JPU_POOL_PA,
             JPU_POOL_SIZE,
         )?;
-        // 让 JPU 直接解码到共享 YUV 缓冲：省掉整帧 memcpy（实测 34ms/帧，
-        // 占整帧 56%）。小核之后不再读这块数据（大核用非缓存映射读），
-        // 所以也可以跳过两次 dcache 维护（各 5.8ms）。
-        d.set_output_buffer(yuv_buf::YUV_BUF_PA, yuv_buf::YUV_BUF_CAP);
+        // 不在这里固定 output_buffer —— 由 set_output_slot() 每帧交替指向 slot 0/1。
         d.set_cpu_reads_output(false);
         Ok(d)
     }
 }
 
-/// 把 MJPEG 解码成 YUV420 并写入共享 DRAM（单缓冲 0x8FE90000）。
+
+
+/// 把 MJPEG 解码成 YUV422 并写入指定 slot 的共享 DRAM。
 ///
+/// `slot` = 0/1，决定 JPU DMA 写入哪个双缓冲 slot。
 /// 成功返回 `(width, height, yuv_len)`。失败时 JPU 已被复位重建，返回 `Err`；
 /// 调用方应跳过本帧 YUV（只通知 MJPEG），下一帧重试。
 pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> {
@@ -112,6 +111,7 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
     }
 
     let decoder = cell.as_mut().expect("decoder present");
+    unsafe { decoder.set_output_buffer(yuv_buf::YUV_BUF_PA, yuv_buf::YUV_BUF_SIZE) };
     match decoder.decode(jpeg) {
         Ok(result) => {
             // 数据已由 JPU 直接 DMA 进共享缓冲，无需再搬。

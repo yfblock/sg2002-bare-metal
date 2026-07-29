@@ -1,34 +1,50 @@
-//! 大小核共享 YUV 帧缓冲（单缓冲）。
+//! 大小核共享 YUV/RGB 帧缓冲。
 //!
-//! 小核抓 MJPEG → JPU 解码 → YUV420 写到 0x8FE90000（rtos_region 内，512KB）。
-//! 大核通过 /dev/cvi-yuv 读 YUV 数据（带 seqlock 一致性重检防撕裂）。
-//! 邮箱 0x8FFFE000 放帧元信息（含 YUV 大小/宽高）。
+//! JPU 解码 YUV420 → IVE 硬件转 RGB888 → 大核通过 mmap 读 RGB。
 //!
-//! 单缓冲：rtos_region 仅 2MB，容纳不下小核镜像+双缓冲 YUV+JPU pool。大核 read_at
-//! 读邮箱 frame_count 拷 YUV 后重检——若推进≥2 说明被覆盖则重试。
+//! 内存布局（rtos_region 2MB 内）：
+//! ```text
+//!   小核镜像    0x8FE00000  ~552KB
+//!   YUV 单缓冲  0x8FE88000  460800 B (640x480 YUV420)
+//!   JPU pool    0x8FEF8800  256KB (stream_buf only)
+//!   RGB 输出    0x8FF38800  921600 B (640x480 RGB888 planar)
+//!   spare       0x8FFE0800  ~129KB → mailbox 0x90040000 / stats 0x90040040
+//! ```
 
-use core::ptr::copy_nonoverlapping;
-
-/// YUV 帧缓冲物理地址（rtos_region 内，小核镜像 stack 之上）。
+/// YUV420 帧缓冲物理地址（JPU DMA 直写）。
 pub const YUV_BUF_PA: usize = 0x8FE8_8000;
-/// YUV 缓冲最大大小。本相机 MJPEG 为 YUV422(614400)，但大核侧 yuv-fps 工具按
-/// YUV420(460800) 读取；压力测试关注通信链路（FPS/帧计数），故裁到 460800 兼容工具。
-/// （完整 YUV422 传输可后续放大缓冲或大核侧改读 yuv_size。）
-pub const YUV_BUF_MAX: usize = 460800;
+/// YUV 帧缓冲容量。摄像头实际发 YUV422(fmt=1)，JPU frame_size=614400。
+pub const YUV_BUF_SIZE: usize = 614400;
 
-/// 共享 YUV 区的**物理容量**：`YUV_BUF_PA` 到 JPU pool(0x8FF1E000) 之间，正好
-/// 614400 字节 = 640x480 YUV422 一整帧。
+/// RGB888 planar 输出缓冲物理地址（IVE CSC 输出）。
+/// R/G/B 三个平面各 640×480 = 307200，共 921600。
+pub const RGB_BUF_PA: usize = 0x8FF5_E000;
+/// RGB888 planar 单帧大小。
+pub const RGB_BUF_SIZE: usize = 921600;
+/// R/G/B 单平面大小。
+pub const RGB_PLANE_SIZE: usize = 640 * 480;
+
+/// 向后兼容。
+pub const YUV_BUF_MAX: usize = YUV_BUF_SIZE;
+pub const YUV_BUF_CAP: usize = YUV_BUF_SIZE;
+
+/// 取 YUV 的 Y/U/V 平面地址。
 ///
-/// 和 `YUV_BUF_MAX` 的区别：这个是缓冲真实能装多少（JPU 直接 DMA 进来的上限），
-/// `YUV_BUF_MAX` 只是上报给大核的裁剪值（保持 yuv-fps 工具的既有行为）。
-/// 之前把 JPU 输出按 460800 给会直接报 "output buffer too small"。
-pub const YUV_BUF_CAP: usize = 614400;
+/// **按 YUV422 planar 计算**：摄像头 MJPEG 是 4:2:2 采样（JPU 报 `fmt=1`，
+/// `frame_size = w*h*2`），色度平面是 `(w/2) × h`，**不是** YUV420 的
+/// `(w/2) × (h/2)`。之前按 420 算，V 平面起始地址少了 `(w/2)*(h/2)` 字节，
+/// 会让 IVE 把 U 平面的下半段当成 V 读。
+#[inline]
+pub fn yuv_planes(pa: usize, w: u32, h: u32) -> (usize, usize, usize) {
+    let y = pa;
+    let u = pa + (w * h) as usize;
+    let v = u + ((w / 2) * h) as usize;
+    (y, u, v)
+}
 
-/// 把 YUV 数据拷到共享缓冲区（小核 identity 映射，直接写 PA）。
-pub fn write_yuv(src: &[u8]) {
-    let n = src.len().min(YUV_BUF_MAX);
-    unsafe {
-        let dst = YUV_BUF_PA as *mut u8;
-        copy_nonoverlapping(src.as_ptr(), dst, n);
-    }
+/// 取 RGB 的 R/G/B 平面地址。
+#[inline]
+pub fn rgb_planes(pa: usize, w: u32, h: u32) -> (usize, usize, usize) {
+    let plane = (w * h) as usize;
+    (pa, pa + plane, pa + 2 * plane)
 }

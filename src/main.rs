@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
 
+mod control;
 mod mailbox;
 mod platform;
 mod plic;
@@ -49,15 +50,9 @@ extern "C" fn rust_main() -> ! {
     stats::init();
     jpu::init_trace();
     platform::platform_init();
-    // 尽早启用 M-mode 外部中断 + PLIC source 61（MBOX_INT_C906_2ND）：
-    // UVC 枚举要几十秒，放在它后面会把开机初期大核发来的消息全丢掉。
-    // 小核收 61、大核收 101，两条线互不干扰（PLIC 每个 source 独立 pending）。
     unsafe { trap::init(); }
-    // 测 YUYV 640x480@30fps 的实际传输速度。
-    // 本机 MJPEG 640x480 只有 60fps 一档，30fps 只存在于 Uncompressed。
-    uvc::set_prefer_uncompressed(false);
-
     uvc::set_preferred_frame_size(640, 480);
+
     uvc::set_preferred_max_pixels(640 * 480);
     uvc::set_preferred_frame_interval(333_333);
     let extras = host::enumerate_topology_only().expect("enum");
@@ -72,13 +67,16 @@ extern "C" fn rust_main() -> ! {
         // AE priority=0：要求摄像头保持恒定帧率，不许为了曝光降帧率。
         // 默认值 1 会让这台声称 60fps 的摄像头实际只给 16.7fps。
         let tune = uvc::UvcImageTuning {
-            ae_priority: Some(0),
+            // 自动曝光：不限制帧率，让摄像头按光照自由调整曝光时间。
+            // 弱光下帧率会从 60fps 降低（AE Priority=1 允许）。
+            ae_priority: None,
             ..Default::default()
         };
         let _ = uvc::uvc_init_camera_controls(dev, ep0, &ent, &tune);
     }
     uvc::uvc_start_video_stream(dev, ep0, &mut sel).expect("start stream");
     let _ = uvc::uvc_capture_one_frame(dev, ep0, &sel);
+
     let mut frame_count: u32 = 0;
     // 自测帧率：小核独占 UART 时（仅启小核、不 bootm 大核）每 100 帧打一次实测 fps。
     // 双核同时跑时 logger 设 Off，这里的 uart::print 仍会输出但量很小（每 ~6s 一行）。
@@ -86,10 +84,15 @@ extern "C" fn rust_main() -> ! {
     const CAPTURE_ONLY: bool = false;
     const FPS_REPORT_EVERY: u32 = 100;
     let mut byte_acc: u64 = 0;
-    let (mut tick_cap, mut tick_dec) = (0u64, 0u64);
+    let (mut tick_cap, mut tick_dec, mut tick_ive) = (0u64, 0u64, 0u64);
     let mut fps_mark_frame: u32 = 0;
     let mut fps_mark_time: u64 = stats::rdtime();
     loop {
+        // 大核可经邮箱暂停流水线，让共享缓冲定格在同一帧供比对。
+        if control::paused() {
+            core::hint::spin_loop();
+            continue;
+        }
         stats::inc_loop();
         stats::set_time_lo();
         stats::set_stage(stats::stage::CAPTURE);
@@ -103,12 +106,9 @@ extern "C" fn rust_main() -> ! {
                 tick_cap += stats::rdtime().wrapping_sub(t_cap0);
                 byte_acc += uvc::take_frame_bytes().max(n as u32) as u64;
                 if CAPTURE_ONLY {
-                    // 判别实验：完全不解码，只抓帧。若帧率仍 ~16.7 说明是摄像头
-                    // 出帧就这么慢；若跳到 ~60 说明是我们每帧的额外开销/重同步在丢帧。
                     stats::inc_jpu_ok();
                     stats::set_stage(stats::stage::DONE);
                 } else if UNCOMPRESSED {
-                    // 摄像头直接给 YUV422，不需要 JPU。测速阶段不搬数据。
                     stats::inc_jpu_ok();
                     stats::set_stage(stats::stage::NOTIFY);
                     let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
@@ -120,7 +120,6 @@ extern "C" fn rust_main() -> ! {
                 let jpeg = match dwc2::dma_rx_slice(uvc::UVC_ASSEMBLED_JPEG_DMA_OFF, n) {
                     Some(s) => s,
                     None => {
-                        // 取不到 DMA 视图：只通知 MJPEG 大小，不置 YUV_READY。
                         let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
                             | mailbox::encode_dims(640, 480);
                         mailbox::notify(frame_count, n as u32, flags);
@@ -135,17 +134,26 @@ extern "C" fn rust_main() -> ! {
                 match decoded {
                     Ok((w, h, len)) => {
                         stats::inc_jpu_ok();
-                        // 报告的 yuv_size 受共享缓冲容量裁剪（write_yuv 同样裁剪）。
+                        // IVE 硬件 CSC: YUV422 → RGB888 (640x480)
+                        let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(yuv_buf::YUV_BUF_PA, w, h);
+                        let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(yuv_buf::RGB_BUF_PA, w, h);
+                        let t_ive0 = stats::rdtime();
+                        if let Err(_e) = sg200x_bsp::ive::csc_yuv420_to_rgb888(
+                            y_pa, u_pa, v_pa, w, w / 2,
+                            r_pa, g_pa, b_pa, w, w, h,
+                        ) {
+                            stats::inc_jpu_err();
+                        }
+                        tick_ive += stats::rdtime().wrapping_sub(t_ive0);
                         let reported = len.min(yuv_buf::YUV_BUF_MAX);
                         let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
                             | mailbox::FLAG_YUV_READY
-                            | mailbox::encode_dims(w, h);
+                            | mailbox::encode_dims(w, h)
+;
                         mailbox::notify(frame_count, reported as u32, flags);
                     }
                     Err(_) => {
                         stats::inc_jpu_err();
-                        // 解码失败（JPU 已在 decode_to_shared 内复位重建）。
-                        // 仅通知 MJPEG 大小，不置 YUV_READY；下一帧重试。
                         let flags = mailbox::FLAG_SOI | mailbox::FLAG_EOI
                             | mailbox::encode_dims(640, 480);
                         mailbox::notify(frame_count, n as u32, flags);
@@ -197,6 +205,8 @@ extern "C" fn rust_main() -> ! {
                     uart::print_dec(us(tick_cap));
                     uart::print(" dec=");
                     uart::print_dec(us(tick_dec));
+                    uart::print(" ive=");
+                    uart::print_dec(us(tick_ive));
                     uart::print(" wyuv=");
                     uart::print_dec(us(jpu::take_write_ticks()));
                     uart::print("} jpu{inv1=");
@@ -217,6 +227,9 @@ extern "C" fn rust_main() -> ! {
                     uart::print("}");
                     tick_cap = 0;
                     tick_dec = 0;
+                    tick_ive = 0;
+                    uart::print(" usbisr=");
+                    uart::print_dec(sg200x_bsp::usb::host::dwc2::ep0::take_usb_isr_count() as u64);
                     uart::print(" jpu_err=");
                     uart::print_dec(jpu::reset_count() as u64);
                     uart::print("\n");
