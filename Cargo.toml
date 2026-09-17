@@ -5,17 +5,15 @@ edition = "2021"
 publish = false
 
 [dependencies]
-# sg200x-bsp：关 c906 feature → dcache_cva/iva 变成 no-op（避免 T-Head 自定义指令在
-# dcache 关闭时行为未定义导致异常）。小核 dcache 已手动关闭，不需要 cache 维护。
-sg200x-bsp = { path = "../sg200x-bsp", default-features = false, features = ["cv182x-host", "c906"] }
-# log：sg200x-bsp 用 log::info!/warn! 打印枚举/协商过程；这里注册一个路由到 UART 的 logger
-log = { version = "0.4", default-features = false }
-# 与 sg200x-bsp 内部 tock-registers 同版本，用于 pinmux 寄存器 .write()
 tock-registers = "0.10"
+log = { version = "0.4", default-features = false }
+riscv_plic = "0.2"
+riscv = "0.16.1"
 
 [[bin]]
 name = "cvirtos"
 path = "src/main.rs"
+test = false
 
 [profile.release]
 panic = "abort"

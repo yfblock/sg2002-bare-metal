@@ -1,22 +1,23 @@
-//! USB 平台初始化：时钟 / PHY / VBUS / pinmux / DWC2 与 PHY MMIO 基址 / DMA 地址转换。
+//! USB 平台初始化：时钟 / PHY / VBUS / pinmux。
 //!
 //! 与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 的平台初始化等价，但裸机无 MMU
-//! （identity 映射，VA=PA），故直接用 sg200x-bsp `soc` 里的物理基址，无需 phys_to_virt。
+//! （identity 映射，VA=PA）：DWC2/PHY 的 MMIO 基址由 USB 栈直接取
+//! `crate::drivers::soc` 常量，无需运行时安装。
 
 use core::ptr::{read_volatile, write_volatile};
 
-use sg200x_bsp::gpio::{Direction, GPIO, GPIO1_BASE};
-use sg200x_bsp::pinmux::{FMUX_BASE, FMUX_USB_VBUS_DET, IOBLK_BASE, IOBLK_GRTC_BASE, Pinmux};
-use sg200x_bsp::soc::{CLKGEN_BASE, CV182X_USB2_PHY_BASE, DWC2_BASE, TOP_BASE};
-use sg200x_bsp::usb;
+use crate::drivers::gpio::{GPIO, GPIO1_BASE};
 use tock_registers::interfaces::Writeable;
+
+use crate::drivers::pinmux;
+use crate::drivers::soc::{CLKGEN_BASE, TOP_BASE};
 
 const IOBLK_G1_PADDR: usize = 0x0300_1800;
 const IOBLK_G1_USB_VBS_DET_OFF: usize = 0x020;
 const VBUS_GPIO_PIN: u8 = 6;
 const VBUS_GPIO_ACTIVE_HIGH: bool = true;
 
-/// 一次性平台初始化：上电 USB 时钟/PHY/VBUS、配 pinmux、安装 DWC2/PHY 基址与 DMA 转换。
+/// 一次性平台初始化：上电 USB 时钟/PHY/VBUS、配 pinmux。
 pub fn platform_init() {
     unsafe {
         enable_usb_clocks_cv181x();
@@ -26,13 +27,7 @@ pub fn platform_init() {
     }
     pinmux_usb_vbus_det_gpio_output_prep();
     enable_usb_vbus_gpio();
-    spin_udelay(200_000);
-
-    // identity 映射：VA = PA。DMA 缓冲（sg200x-bsp 的 DMA_BUF，位于本镜像 .bss @ 0x880xxxxx）
-    // 的 VA 即 PA，HCDMA 直接写 VA 低 32 位即可。
-    usb::set_dwc2_base_virt(DWC2_BASE);
-    usb::set_cv182x_phy_base_virt(CV182X_USB2_PHY_BASE);
-    usb::set_usb_dma_to_phys_fn(None);
+    crate::arch::time::delay(core::time::Duration::from_millis(200));
 }
 
 unsafe fn enable_usb_clocks_cv181x() {
@@ -57,18 +52,18 @@ unsafe fn cvitek_usb_top_host_bringup() {
     unsafe {
         let v = read_volatile(rst);
         write_volatile(rst, v & !(1 << 11));
-        spin_udelay(50);
+        crate::arch::time::delay(core::time::Duration::from_micros(50));
         write_volatile(rst, v | (1 << 11));
-        spin_udelay(50);
+        crate::arch::time::delay(core::time::Duration::from_micros(50));
 
         let usb_pin = (top + 0x48) as *mut u32;
         let x = read_volatile(usb_pin);
         let dev_mode = (x & !0xC0u32) | 0xC0u32 | 0x01u32;
         write_volatile(usb_pin, dev_mode);
-        spin_udelay(1_000);
+        crate::arch::time::delay(core::time::Duration::from_millis(1));
         let host_mode = (x & !0xC0u32) | 0x40u32 | 0x01u32;
         write_volatile(usb_pin, host_mode);
-        spin_udelay(1_000);
+        crate::arch::time::delay(core::time::Duration::from_millis(1));
 
         let eco = (top + 0xB4) as *mut u32;
         write_volatile(eco, read_volatile(eco) | 0x80);
@@ -76,12 +71,11 @@ unsafe fn cvitek_usb_top_host_bringup() {
 }
 
 fn pinmux_usb_vbus_det_gpio_output_prep() {
-    // identity：FMUX_BASE/IOBLK_BASE/IOBLK_GRTC_BASE 直接当 VA
-    let pinmux = unsafe { Pinmux::new(FMUX_BASE, IOBLK_BASE, IOBLK_GRTC_BASE) };
-    pinmux
-        .fmux()
+    // 复用 USB_VBUS_DET 引脚为 XGPIOB[6](identity 映射,FMUX 寄存器视图直接取)
+    pinmux::regs()
         .usb_vbus_det
-        .write(FMUX_USB_VBUS_DET::FSEL::XGPIOB_6);
+        .write(pinmux::FSEL::VAL::XGPIOB_6);
+    // IOBLK G1:USB_VBUS_DET pad 驱动能力拉满(bits[7:5]=7,7=最强档)
     let r = (IOBLK_G1_PADDR + IOBLK_G1_USB_VBS_DET_OFF) as *mut u32;
     unsafe {
         let v = read_volatile(r);
@@ -91,13 +85,6 @@ fn pinmux_usb_vbus_det_gpio_output_prep() {
 
 fn enable_usb_vbus_gpio() {
     let gpio = unsafe { GPIO::new(GPIO1_BASE) };
-    gpio.pin(VBUS_GPIO_PIN).set_direction(Direction::Output);
+    gpio.pin(VBUS_GPIO_PIN).set_output_direction();
     gpio.pin(VBUS_GPIO_PIN).set(VBUS_GPIO_ACTIVE_HIGH);
-}
-
-/// 粗粒度延时（约 us 微秒级，非精确）。
-fn spin_udelay(us: u32) {
-    for _ in 0..us.saturating_mul(64) {
-        core::hint::spin_loop();
-    }
 }

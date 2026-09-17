@@ -1,0 +1,12 @@
+[package]
+name = "b2s-comm-test"
+version = "0.1.0"
+edition = "2021"
+
+# 大小核通信测试(大核用户态程序,跑在 StarryOS 上)。
+# 独立 cargo 工程,不属于 bare-metal 小核固件 crate。
+
+[dependencies]
+
+[profile.release]
+opt-level = "s"

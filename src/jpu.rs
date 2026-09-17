@@ -23,10 +23,10 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use sg200x_bsp::jpu::{JpuDecoder, regs::{JPU_REG_BASE, VC_REG_BASE}};
-use sg200x_bsp::soc::TOP_BASE;
+use crate::drivers::jpu::{JpuDecoder, regs::{JPU_REG_BASE, VC_REG_BASE}};
+use crate::drivers::soc::TOP_BASE;
 
-use crate::uart;
+use crate::platform::uart;
 use crate::yuv_buf;
 
 /// JPU DMA 内存池物理地址。YUV 缓冲之后，避免重叠。
@@ -58,15 +58,6 @@ pub fn take_write_ticks() -> u64 {
     WRITE_TICKS.swap(0, Ordering::Relaxed)
 }
 
-fn identity_dma(v: usize) -> usize {
-    v
-}
-
-/// 启用 BSP 的 decode trace：步号写进共享统计块，卡住时大核能读到停在哪一步。
-pub fn init_trace() {
-    sg200x_bsp::jpu::trace::set_addr(crate::stats::TRACE_PA);
-}
-
 /// 创建一个新 decoder（首次调用 + wedge 恢复时用）。
 fn create_decoder() -> Result<JpuDecoder, &'static str> {
     // SAFETY: 小核 identity 映射（VA=PA），pool 在预留 rtos 区（普通 DRAM，JPU DMA
@@ -76,7 +67,6 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
             JPU_REG_BASE,
             TOP_BASE,
             VC_REG_BASE,
-            identity_dma,
             JPU_POOL_PA,
             JPU_POOL_SIZE,
         )?;
@@ -120,7 +110,6 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
         Err(e) => {
             // wedge / 解码错误：drop 旧 decoder 并重建（重跑硬件 init + 软复位）。
             let n = RESET_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            crate::stats::inc_jpu_reset();
             // 节流：第 1、每 16 次打印一次，避免冲掉大核串口。
             if n == 1 || n % 16 == 0 {
                 uart::print("[JPU] decode err=");

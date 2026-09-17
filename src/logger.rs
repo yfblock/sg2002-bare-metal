@@ -33,7 +33,7 @@ impl log::Log for UartLogger {
 struct UartWriter;
 impl core::fmt::Write for UartWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
-        crate::uart::print(s);
+        crate::platform::uart::print(s);
         Ok(())
     }
 }

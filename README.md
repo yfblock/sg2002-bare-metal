@@ -10,7 +10,7 @@
   等直接传物理基址，`set_usb_dma_to_phys_fn(None)`（VA=PA）。
 - DMA 缓冲（sg200x-bsp 的 `DMA_BUF`，~385 KiB）落在本镜像 `.bss` @ 0x880xxxxx，DWC2 32-bit
   HCDMA 直接写该地址（在 DRAM 内，DMA 可达）。
-- UVC 走**轮询**（sg200x-bsp 的 ep0.rs 不依赖中断），故无需 trap/中断。
+- UVC 走**轮询**（sg200x-bsp 的 ep0.rs 不依赖中断d），故无需 trap/中断。
 
 ## 架构
 
@@ -31,15 +31,14 @@
 - `src/platform.rs` — USB 平台初始化（时钟/PHY/VBUS/pinmux/DWC2 基址/DMA 转换）。
 - `src/logger.rs` — `log::Log` → UART。
 - `src/uart.rs` / `src/util.rs` / `src/panic.rs` — UART、忙等、panic。
-- `memory.ld` / `.cargo/config.toml` / `build.sh` — 链接、构建。
+- `memory.ld` / `.cargo/config.toml` / `Makefile` — 链接、构建。
 
 ## 构建 + 真机
 
 ```bash
-./build.sh                                   # → cvirtos.bin（~66KB，entry=0x88000000）
-cp cvirtos.bin /srv/tftp/cvirtos.bin
-# /srv/tftp/cmd.txt: bootcmd=tftp 0x88000000 cvirtos.bin; cvi_reset_c906l 0x88000000
-sg2002-ctl 0; sleep 2; sg2002-ctl 1; tio /dev/ttyUSB0 -b 115200
+make build        # → cvirtos.bin（~79KB，entry=0x8FE00000）
+make deploy       # cp → /srv/tftp/cvirtos.bin
+make test         # 一键真机回归:构建+部署+boardctl run b2sbm(双核通信测试,断言 PASS)
 ```
 
 串口（开头几行 U-Boot 与小核共用 UART0 会短暂交错）：

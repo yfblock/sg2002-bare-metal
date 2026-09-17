@@ -5,8 +5,8 @@ use core::panic::PanicInfo;
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     // 写一个错误标记到邮箱 magic，便于大核发现小核 panic。
-    crate::mailbox::write(0xFFFF_FFFF, 0, 0);
+    crate::ipc::write(0xFFFF_FFFF, 0, 0);
     loop {
-        unsafe { core::arch::asm!("wfi") };
+        riscv::asm::wfi();
     }
 }
