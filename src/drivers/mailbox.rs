@@ -95,7 +95,8 @@ pub unsafe fn doorbell_big(payload0: u32, payload1: u32) {
     big.int_mask.set(0);
 
     let en = &regs().cpu1_en;
-    en.set(en.get() | (1 << SLOT_S2B));
+    // 绝对写:cpu1_en 只有 slot0(S2B)一个使用者,不 RMW(同 claim_b2s 的理由)。
+    en.set(1 << SLOT_S2B);
 
     regs().mbox_set.set(1 << SLOT_S2B);
 }
@@ -109,19 +110,20 @@ pub unsafe fn doorbell_big(payload0: u32, payload1: u32) {
 pub unsafe fn claim_b2s() -> Option<u32> {
     let small = &regs().banks[CPU_SMALL];
     let int_val = small.int_val.get();
-    if int_val == 0 {
-        return None;
-    }
-    small.int_clr.set(int_val);
-    let en = &regs().cpu2_en;
-    en.set(en.get() & !int_val);
-
     if int_val & (1 << SLOT_B2S) == 0 {
         return None;
     }
+    // ① 先取 payload:大核把「en 清零」当消费确认,一旦清 en 它就可能覆写
+    //    ctx slot1 发下一轮——payload 必须在此之前读走。
     let slot = &regs().ctx[SLOT_B2S];
     let msg = slot.payload.get();
     slot.payload.set(0);
-    slot.aux.set(0);
+    // 注意:ctx[1].aux(0x0190_040C)已被 mtimer 心跳借用为 PC 采样,这里不再清零。
+    // ② 再清 pending。绝对写 bit1,不清其他位(int_val 可能含新到期的位)。
+    small.int_clr.set(1 << SLOT_B2S);
+    // ③ 最后清 en。绝对写 0:cpu2_en 只有 slot1(B2S)一个使用者,而大核
+    //    b2s_send 对同一字 RMW 置位——跨核 RMW 交错会把刚清的位复活,
+    //    大核的消费确认(b2s_consumed 轮询该位)从此永假,双侧卡死。
+    regs().cpu2_en.set(0);
     Some(msg)
 }

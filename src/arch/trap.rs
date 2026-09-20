@@ -23,14 +23,16 @@ pub unsafe fn init_mtvec() {
     mtvec::write(Mtvec::new(_trap_entry as *const () as usize, mtvec::TrapMode::Direct));
 }
 
-/// 完整中断初始化：安装向量 + 初始化 PLIC + 开启外部中断。
+/// 完整中断初始化：安装向量 + 初始化 PLIC + 开启外部中断 + 启动 mtimer 心跳。
 /// 在平台初始化完成后调用（过早开中断可能在业务未就绪时收到邮箱消息）。
 pub unsafe fn init_interrupts() {
     init_mtvec();
     plic::init();
     // MIE.MEIE (bit 11) = 外部中断使能；mstatus.MIE (bit 3) = 全局中断使能
     riscv::register::mie::set_mext();
+    riscv::register::mie::set_mtimer();
     riscv::register::mstatus::set_mie();
+    super::time::init_heartbeat();
 }
 
 /// Trap handler：处理 PLIC 外部中断 + 访问异常。
@@ -51,6 +53,9 @@ extern "C" fn rust_trap_handler(mcause: Mcause, cur_sp: usize) -> usize {
                 _ => {}
             }
             plic::complete(src);
+        }
+        Ok(Trap::Interrupt(Interrupt::MachineTimer)) => {
+            crate::arch::time::heartbeat_tick();
         }
         Ok(Trap::Exception(Exception::LoadFault | Exception::StoreFault)) => {
             // 访问异常：打印 mepc + mtval（故障地址），然后死循环

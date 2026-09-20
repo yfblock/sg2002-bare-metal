@@ -155,30 +155,31 @@ pub fn set_muted(v: bool) {
 
 /// 处理邮箱中断：认领大核消息 → 控制命令 / 回显 → 回写 DRAM 邮箱 reply 字段。
 pub fn handle_mailbox_irq() {
-    let Some(msg) = (unsafe { hw::claim_b2s() }) else {
-        return;
-    };
-    // 控制消息 0xF0_49_<cmd>_<arg>（'I' = IVE 调试通道）。
-    if msg & 0xFFFF_0000 == 0xF049_0000 {
-        let cmd = (msg >> 8) & 0xFF;
-        let arg = msg & 0xFF;
-        match cmd {
-            0x50 => set_paused(arg != 0),
-            0x56 => crate::drivers::ive::set_input_fmt(arg),
-            0x57 => set_muted(arg != 0),
-            _ => {}
+    // 排水:一轮 claim 的窗口内若大核又敲铃,级别触发的 PLIC 会再次进来;
+    // 这里顺带就地消费,省一次 trap 进出(大核 2s 一发,循环至多两圈)。
+    while let Some(msg) = unsafe { hw::claim_b2s() } {
+        // 控制消息 0xF0_49_<cmd>_<arg>（'I' = IVE 调试通道）。
+        if msg & 0xFFFF_0000 == 0xF049_0000 {
+            let cmd = (msg >> 8) & 0xFF;
+            let arg = msg & 0xFF;
+            match cmd {
+                0x50 => set_paused(arg != 0),
+                0x56 => crate::drivers::ive::set_input_fmt(arg),
+                0x57 => set_muted(arg != 0),
+                _ => {}
+            }
+        } else if !muted() {
+            // ISR 上下文:try 锁一次,拿不到就丢这行回显(绝不等待,防 ISR 延迟);
+            // 三段输出拼在一次锁窗口内,保证 [MB-RX] 行不被大核打断
+            use crate::platform::uart;
+            if uart::line_lock_try() {
+                uart::print_nolock("[MB-RX] big->small msg=");
+                uart::print_hex_nolock(msg as u64);
+                uart::print_nolock("\n");
+                uart::line_unlock();
+            }
         }
-    } else if !muted() {
-        // ISR 上下文:try 锁一次,拿不到就丢这行回显(绝不等待,防 ISR 延迟);
-        // 三段输出拼在一次锁窗口内,保证 [MB-RX] 行不被大核打断
-        use crate::platform::uart;
-        if uart::line_lock_try() {
-            uart::print_nolock("[MB-RX] big->small msg=");
-            uart::print_hex_nolock(msg as u64);
-            uart::print_nolock("\n");
-            uart::line_unlock();
-        }
+        // 回写 DRAM 邮箱 reply 字段，大核读回即证明往返成功
+        write_reply(msg);
     }
-    // 回写 DRAM 邮箱 reply 字段，大核读回即证明往返成功
-    write_reply(msg);
 }

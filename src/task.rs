@@ -147,6 +147,9 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
     uart::print_dec(us(st.tick_dec));
     uart::print(" ive=");
     uart::print_dec(us(st.tick_ive));
+    // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
+    uart::print(" hb=");
+    uart::print_dec(unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) } as u64);
     uart::print("} jpu{inv1=");
     uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
         crate::drivers::jpu::trace::step::INV_FRAME) as u64));

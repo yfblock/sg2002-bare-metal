@@ -64,9 +64,19 @@ fn flag_addr(cpu: usize) -> usize {
     CTX_SLOT2 + cpu * 4
 }
 
+/// 本核持有标记(main 与 ISR 同核共用一套 Dekker 旗字)。ISR 不得对 main
+/// 已持有的锁做「升旗-判让-降旗」——那会解掉被打断的 main 手里的锁,
+/// 让两核同时认为持锁。ISR 见此标记直接放弃回显。
+static LOCK_HELD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
 /// 尝试获锁一次(适合 ISR:失败立即返回 false,绝不等待)
 pub(crate) fn line_lock_try() -> bool {
-    unsafe {
+    use core::sync::atomic::Ordering;
+    if LOCK_HELD.load(Ordering::Acquire) {
+        // 本核 main 正持锁(打印中被本核 ISR 打断):绝不嵌套、绝不动旗字
+        return false;
+    }
+    let ok = unsafe {
         core::ptr::write_volatile(flag_addr(ME) as *mut u32, 1);
         riscv::asm::fence();
         let other = core::ptr::read_volatile(flag_addr(1 - ME) as *const u32);
@@ -74,12 +84,17 @@ pub(crate) fn line_lock_try() -> bool {
             core::ptr::write_volatile(flag_addr(ME) as *mut u32, 0);
             return false;
         }
+        true
+    };
+    if ok {
+        LOCK_HELD.store(true, Ordering::Release);
     }
-    true
+    ok
 }
 
 /// 主循环获锁:Dekker 完整让行 + 超时强闯兜底
 pub(crate) fn line_lock_wait() {
+    use core::sync::atomic::Ordering;
     unsafe {
         core::ptr::write_volatile(flag_addr(ME) as *mut u32, 1);
         riscv::asm::fence();
@@ -104,10 +119,13 @@ pub(crate) fn line_lock_wait() {
             }
         }
     }
+    LOCK_HELD.store(true, Ordering::Release);
 }
 
 /// 放锁:把 turn 让给对方,再降旗
 pub(crate) fn line_unlock() {
+    use core::sync::atomic::Ordering;
+    LOCK_HELD.store(false, Ordering::Release);
     unsafe {
         riscv::asm::fence();
         core::ptr::write_volatile(CTX_SLOT3 as *mut u32, (1 - ME) as u32);
