@@ -22,9 +22,10 @@ impl<T> SyncUnsafeCell<T> {
     }
 }
 
-/// 解码分步计时：`decode()` 每走一步累计耗时（ticks），由 [FPS] 报告输出。
+/// 解码分步计时：`decode()` 每走一步累计耗时，由 [FPS] 报告输出。
 pub mod trace {
-    use core::sync::atomic::Ordering;
+    use core::sync::atomic::{AtomicU64, Ordering};
+    use core::time::Duration;
 
     /// 步号（仅保留 [FPS] 报告实际读取的 5 步）。
     pub mod step {
@@ -35,33 +36,29 @@ pub mod trace {
         pub const INV_AFTER: u32 = 15;
     }
 
-    /// 各步累计耗时（rdtime ticks），下标见 `step`。只累加不打印。
-    pub static STEP_TICKS: [core::sync::atomic::AtomicU32; 17] =
-        [const { core::sync::atomic::AtomicU32::new(0) }; 17];
+    /// 各步累计耗时（纳秒——Duration 的原子存储基元），下标见 `step`。
+    /// 只累加不打印;u64 纳秒容量 ~584 年,累加窗口内不溢出。
+    static STEP_NANOS: [AtomicU64; 17] = [const { AtomicU64::new(0) }; 17];
 
-    #[inline]
-    fn now_ticks() -> u64 {
-        crate::arch::time::rdtime()
-    }
-
-    /// 取走并清零某步的累计 ticks。
-    pub fn take_step_ticks(step: u32) -> u32 {
-        STEP_TICKS
+    /// 取走并清零某步的累计耗时。
+    pub fn take_step_time(step: u32) -> Duration {
+        STEP_NANOS
             .get(step as usize)
-            .map(|a| a.swap(0, Ordering::Relaxed))
-            .unwrap_or(0)
+            .map(|a| Duration::from_nanos(a.swap(0, Ordering::Relaxed)))
+            .unwrap_or(Duration::ZERO)
     }
 
     /// 记一步耗时：把「上次 mark 到现在」累加到 `step`。
+    /// ticks → Duration 统一经 `arch::time::elapsed_since`。
     #[inline]
     pub(crate) fn mark_timed(step: u32) {
-        use core::sync::atomic::AtomicU64;
         static LAST: AtomicU64 = AtomicU64::new(0);
-        let now = now_ticks();
+        let now = crate::arch::time::rdtime();
         let prev = LAST.swap(now, Ordering::Relaxed);
         if prev != 0 && now > prev {
-            if let Some(a) = STEP_TICKS.get(step as usize) {
-                a.fetch_add((now - prev) as u32, Ordering::Relaxed);
+            let dt = crate::arch::time::elapsed_since(prev);
+            if let Some(a) = STEP_NANOS.get(step as usize) {
+                a.fetch_add(dt.as_nanos() as u64, Ordering::Relaxed);
             }
         }
     }
