@@ -59,112 +59,24 @@ fn visit_default_depth(
         topo_log!(
             depth,
             "[USB] root dev@0 VID={:04x} PID={:04x} dev_class={:02x}",
-            dev.vid,
-            dev.pid,
-            dev.dev_class
+            dev.vid, dev.pid, dev.dev_class
         );
     } else {
         topo_log!(
             depth,
             "[USB] dev@0 (hub {} port {}) VID={:04x} PID={:04x} dev_class={:02x}",
-            parent_hub,
-            port_on_hub,
-            dev.vid,
-            dev.pid,
-            dev.dev_class
+            parent_hub, port_on_hub, dev.vid, dev.pid, dev.dev_class
         );
     }
 
     if dev.is_hub() {
         let hub_addr = dev.ep0.dev() as u8;
         topo_log!(depth, "[USB]   -> Hub enumerated addr={}", hub_addr);
-
-        let hub_dev = super::hub::DeviceHub::new(&dev.ep0)?;
-        let nports = hub_dev.nports();
-        let pwr_good_ms = hub_dev.pwr_good_ms().max(20); // 给 ≥20ms 富余
-        topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
-            nports, pwr_good_ms);
-
-        // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
-        for port in 1..=nports {
-            if let Err(e) = hub_dev.port_power(port) {
-                topo_log!(depth, "[USB]   -> port {} POWER fail: {:?}", port, e);
-            }
-        }
-        // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
-        crate::arch::time::delay(hub_dev.pwr_good() + core::time::Duration::from_millis(100));
-
-        let mut claimed: Option<super::device::UsbDevice> = None;
-        for port in 1..=nports {
-            let status = match hub_dev.port_status_w0(port) {
-                Ok(s) => s,
-                Err(e) => {
-                    topo_log!(
-                        depth,
-                        "[USB]   -> port {} GET_PORT_STATUS: {:?}",
-                        port,
-                        e
-                    );
-                    continue;
-                }
-            };
-            let conn = status & super::hub::W0_CONNECTION != 0;
-            topo_log!(
-                depth,
-                "[USB]   -> port {} wPortStatus={:#06x} {}",
-                port,
-                status,
-                if conn { "CONNECTED" } else { "empty" }
-            );
-            if !conn {
-                continue;
-            }
-
-            // ③④ 清连接变化 → 复位并等稳定(TDRSTR/TRSTRCY) → 清复位变化
-            if let Err(e) = super::hub::connect_reset_sequence(&hub_dev, port) {
-                topo_log!(depth, "[USB]   -> port {} reset sequence: {:?}", port, e);
-                continue;
-            }
-
-            // 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
-            let after = match hub_dev.port_status_w0(port) {
-                Ok(s) => s,
-                Err(e) => {
-                    topo_log!(
-                        depth,
-                        "[USB]   -> port {} after-reset GET_PORT_STATUS: {:?}",
-                        port,
-                        e
-                    );
-                    continue;
-                }
-            };
-            let enabled = after & super::hub::W0_ENABLE != 0;
-            let speed = super::hub::PortSpeed::from_status(after);
-            topo_log!(
-                depth,
-                "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
-                port,
-                after,
-                enabled,
-                speed.as_str()
-            );
-            if !enabled {
-                continue;
-            }
-
-            // ⑤ 速度仅记日志（实际运行摄像头为 FS；本驱动走 FS 单向轮询、
-            //    无 split transaction 需求）。
-
-            let child_speed = super::hub::PortSpeed::from_status(after);
-            let sub = visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, next_addr)?;
-            claimed = claimed.or(sub); // 多台候选先到先得
-        }
-        return Ok(claimed);
+        return walk_hub_ports(depth, &super::hub::DeviceHub::new(&dev.ep0)?, hub_addr, next_addr);
     }
 
-    // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者胜出,
-    // 接管记录写遍历上下文——驱动自身无状态)。
+    // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者胜出;
+    // 驱动无状态,接管结果沿返回值上抛)。
     topo_log!(
         depth,
         "[USB]   -> function addr={} first_ifc_class={:02x}",
@@ -178,6 +90,74 @@ fn visit_default_depth(
     }
 
     Ok(None)
+}
+
+/// 遍历一台 hub 的全部下游端口:供电 → 等稳定 → 逐口扫连接/复位/使能,
+/// 对连接且使能的端口递归 [`visit_default_depth`];返回子树被接管的设备
+/// (多台先到先得)。单口失败只记日志跳过,不中断整树。
+fn walk_hub_ports(
+    depth: u8,
+    hub_dev: &super::hub::DeviceHub,
+    hub_addr: u8,
+    next_addr: &mut u8,
+) -> UsbResult<Option<super::device::UsbDevice>> {
+    let nports = hub_dev.nports();
+    let pwr_good_ms = hub_dev.pwr_good_ms().max(20); // 给 ≥20ms 富余
+    topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
+        nports, pwr_good_ms);
+
+    // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
+    for port in 1..=nports {
+        if let Err(e) = hub_dev.port_power(port) {
+            topo_log!(depth, "[USB]   -> port {} POWER fail: {:?}", port, e);
+        }
+    }
+    // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
+    crate::arch::time::delay(hub_dev.pwr_good() + core::time::Duration::from_millis(100));
+
+    let mut claimed: Option<super::device::UsbDevice> = None;
+    for port in 1..=nports {
+        // ③ 扫连接
+        let status = match hub_dev.port_status_w0(port) {
+            Ok(s) => s,
+            Err(e) => {
+                topo_log!(depth, "[USB]   -> port {} GET_PORT_STATUS: {:?}", port, e);
+                continue;
+            }
+        };
+        let conn = status & super::hub::W0_CONNECTION != 0;
+        topo_log!(depth, "[USB]   -> port {} wPortStatus={:#06x} {}",
+            port, status, if conn { "CONNECTED" } else { "empty" });
+        if !conn {
+            continue;
+        }
+
+        // ④ 清连接变化 → 复位并等稳定(TDRSTR/TRSTRCY) → 清复位变化
+        if let Err(e) = hub_dev.connect_reset_sequence(port) {
+            topo_log!(depth, "[USB]   -> port {} reset sequence: {:?}", port, e);
+            continue;
+        }
+
+        // ⑤ 复位后必须 PORT_ENABLE=1,否则该口复位失败
+        let after = match hub_dev.port_status_w0(port) {
+            Ok(s) => s,
+            Err(e) => {
+                topo_log!(depth, "[USB]   -> port {} after-reset GET_PORT_STATUS: {:?}", port, e);
+                continue;
+            }
+        };
+        let enabled = after & super::hub::W0_ENABLE != 0;
+        let child_speed = super::hub::PortSpeed::from_status(after);
+        topo_log!(depth, "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
+            port, after, enabled, child_speed.as_str());
+        if !enabled {
+            continue;
+        }
+
+        let sub = visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, next_addr)?;
+        claimed = claimed.or(sub); // 多台候选先到先得
+    }
+    Ok(claimed)
 }
 
 /// 递归枚举整条总线并打印拓扑。

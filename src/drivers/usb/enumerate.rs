@@ -5,7 +5,7 @@ use core::time::Duration;
 
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::hub::{self, Hub, PortSpeed, RootHub};
+use crate::drivers::usb::hub::{Hub, PortSpeed, RootHub};
 use crate::drivers::usb::topology;
 use crate::drivers::usb::device::UsbDevice;
 
@@ -14,12 +14,12 @@ use crate::drivers::usb::device::UsbDevice;
 pub fn enumerate_camera() -> UsbResult<UsbDevice> {
     dwc2::dwc2_host_init()?;
     let root = RootHub;
-    if !hub::wait_connect(&root, 1, Duration::from_secs(5)) {
+    if !root.wait_connect(1, Duration::from_secs(5)) {
         return Err(UsbError::Hardware(
             "root port CONNSTS=0: no device (enable VBUS e.g. GPIOB6 / cable / PHY)",
         ));
     }
-    hub::connect_reset_sequence(&root, 1)?;
+    root.connect_reset_sequence(1)?;
     let speed = PortSpeed::from_status(root.port_status_w0(1)?);
     topology::enumerate_bus(speed)
 }

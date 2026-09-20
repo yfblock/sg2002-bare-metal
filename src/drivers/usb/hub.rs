@@ -40,6 +40,31 @@ pub trait Hub {
     fn clear_reset_change(&self, port: u8) -> UsbResult<()>;
     /// 端口上电稳定时间（外部 hub 描述符 `bPwrOn2PwrGood`；根口常驻供电，0）。
     fn pwr_good(&self) -> Duration;
+
+    /// 轮询等待端口报告连接（按时上限，命中返回 true）。
+    fn wait_connect(&self, port: u8, timeout: Duration) -> bool {
+        let t0 = crate::arch::time::rdtime();
+        loop {
+            if let Ok(w0) = self.port_status_w0(port) {
+                if w0 & W0_CONNECTION != 0 {
+                    return true;
+                }
+            }
+            if crate::arch::time::elapsed_since(t0) >= timeout {
+                return false;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    /// 端口「清连接变化 → 复位并等稳定 → 清复位变化」统一序列，
+    /// 对根口与外部 hub 无差别。
+    fn connect_reset_sequence(&self, port: u8) -> UsbResult<()> {
+        self.clear_connection_change(port)?;
+        self.reset_port(port)?;
+        self.clear_reset_change(port)?;
+        Ok(())
+    }
 }
 
 /// 根 hub：DWC2 控制器自身（单端口、寄存器固定地址——本类型仅作 trait
@@ -197,27 +222,4 @@ impl PortSpeed {
     }
 }
 
-/// 轮询等待端口报告连接（按时上限，命中返回 true）。
-pub fn wait_connect(hub: &dyn Hub, port: u8, timeout: Duration) -> bool {
-    let t0 = crate::arch::time::rdtime();
-    loop {
-        if let Ok(w0) = hub.port_status_w0(port) {
-            if w0 & W0_CONNECTION != 0 {
-                return true;
-            }
-        }
-        if crate::arch::time::elapsed_since(t0) >= timeout {
-            return false;
-        }
-        core::hint::spin_loop();
-    }
-}
 
-/// 端口「清连接变化 → 复位并等稳定 → 清复位变化」统一序列，
-/// 对根口与外部 hub 无差别。
-pub fn connect_reset_sequence(hub: &dyn Hub, port: u8) -> UsbResult<()> {
-    hub.clear_connection_change(port)?;
-    hub.reset_port(port)?;
-    hub.clear_reset_change(port)?;
-    Ok(())
-}
