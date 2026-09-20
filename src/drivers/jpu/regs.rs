@@ -9,7 +9,7 @@ use tock_registers::{
 use core::time::Duration;
 
 use crate::arch::time::{delay, elapsed_since, rdtime};
-use crate::platform::JPU_REG_BASE;
+use crate::platform::{JPU_REG_BASE, VC_REG_BASE};
 
 
 register_bitfields![u32,
@@ -27,10 +27,13 @@ register_structs! {
     }
 }
 
-/// 取 VC 寄存器视图（基址为编译期常量，恒有效）。
-#[inline]
-fn vc() -> &'static VcRegs {
-    unsafe { &*(0x0B03_0000 as *const VcRegs) }
+/// 使能 VC（Video Codec）子块——JPU 所属的电源/时钟门控域
+/// （`platform::VC_REG_BASE`,bit0-4 各对应一个编解码子块,0x1F = 全开）。
+/// 不开它 JPU 寄存器不响应。写后读回一次,保证使能落盘再继续 JPU 操作。
+fn enable_vc_subblocks() {
+    let vc = unsafe { &*(VC_REG_BASE as *const VcRegs) };
+    vc.enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
+    let _ = vc.enable.get();
 }
 
 const JPU_WARMUP_BBC_BASE: u32 = 0x8026_C000;
@@ -180,8 +183,7 @@ pub fn hardware_init() {
     // JPEG 时钟使能 + 复位释放(TOP 寄存器,soc.rs TopRegs 视图)
     top.clk_jpeg.set(top.clk_jpeg.get() | CLK_JPEG_ENABLE); // RMW: 只置时钟位
     top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
-    // VC 子块使能(bit0-4)
-    vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
+    enable_vc_subblocks();
 
     let regs = jpu_regs();
     let _ = regs.pic_status.get();
@@ -212,8 +214,7 @@ pub fn hard_reset() {
     top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
     delay(Duration::from_millis(1));
     // 3) VC 子块重新使能
-    vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
-    let _ = vc().enable.get();
+    enable_vc_subblocks();
 }
 
 pub fn clear_pic_status(status: u32) {

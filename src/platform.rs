@@ -36,6 +36,8 @@ pub const DWC2_BASE: usize = 0x0434_0000;
 pub const IVE_BASE: usize = 0x0A0A_0000;
 /// JPU JPEG 编解码器。
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
+/// VC(Video Codec)子块使能域(JPU 邻区,bit0-4 各编解码子块的电源门控)。
+pub const VC_REG_BASE: usize = 0x0B03_0000;
 /// mtimer 心跳计数（10ms/拍,借邮箱 ctx[3].aux——turn 只用低 4B）。
 pub const HEARTBEAT_PA: usize = 0x0190_041C;
 /// 最近被时钟打断的 PC 采样（借邮箱 ctx[1].aux,B2S 协议不使用 aux）。
