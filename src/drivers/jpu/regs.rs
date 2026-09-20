@@ -217,13 +217,6 @@ pub fn hard_reset() {
     enable_vc_subblocks();
 }
 
-/// 清 `PIC_STATUS` 当前置位（W1C:写 1 清 DONE/ERROR,写 0 无效——所以传
-/// **读到的值**写回即清当前状态;裸 `.set()` 读起来像"设置"实际是清除,
-/// 故留函数名做语义翻译,勿内联）。
-pub fn clear_pic_status(status: u32) {
-    jpu_regs().pic_status.set(status);
-}
-
 #[inline]
 /// 等待软复位完成。按时间设上限（10ms 足够）——次数上限的实际时长取决于主频
 /// 和循环开销，在小核上会长到不可接受，见 [`crate::arch::time`]。

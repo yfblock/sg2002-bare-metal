@@ -6,7 +6,7 @@ use super::regs::{
     HUFF_ADDR_MAX, HUFF_ADDR_PTR, HUFF_PHASE_MAX, HUFF_PHASE_MIN, HUFF_PHASE_PTR, HUFF_PHASE_VAL,
     MJPEG_HUFF_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START, MJPEG_PIC_STATUS,
     MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y, STREAM_BUF_SIZE, VALUE32,
-    bbc_strm_ctrl_value, clear_pic_status, jpu_regs,
+    bbc_strm_ctrl_value, jpu_regs,
     pic_ctrl_value, wait_bbc_idle, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
 };
 use crate::arch::cache::dcache_clean_range;
@@ -404,7 +404,8 @@ fn start_decode(frame_phys: usize,
     jpu.dpb_cstride.write(VALUE32::VAL.val(layout.stride_c));
     jpu.clp_info.write(VALUE32::VAL.val(0));
 
-    clear_pic_status(jpu.pic_status.get());
+    // W1C:写 1 清 DONE/ERROR,清上一帧残留状态再启动
+    jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
     jpu.pic_start.write(MJPEG_PIC_START::START_PIC::SET);
     Ok(())
 }
@@ -424,7 +425,8 @@ fn poll_decode_done() -> Result<(), &'static str> {
 
     loop {
         if jpu.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
-            clear_pic_status(jpu.pic_status.get());
+            // W1C:写 1 清 DONE/ERROR
+            jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
             return Ok(());
         }
 
@@ -436,7 +438,8 @@ fn poll_decode_done() -> Result<(), &'static str> {
                 status,
                 err_mb
             );
-            clear_pic_status(status);
+            // W1C:写 1 清 DONE/ERROR
+            jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
             return Err("JPU decode error");
         }
 
