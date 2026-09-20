@@ -2,6 +2,7 @@
 //!
 //! 在静态对齐缓冲上实现 16 KiB 页位图分配；所有 `unsafe` 集中在本模块。
 
+use super::SyncUnsafeCell;
 use super::regs::{JPU_DRAM_PHYSICAL_SIZE, VMEM_PAGE_SIZE};
 
 /// 由 JPU 内存池分配的物理地址区间。
@@ -93,8 +94,6 @@ impl JpuMemoryPool {
         }
     }
 }
-
-use super::SyncUnsafeCell;
 
 struct JpuMemState {
     pool: JpuMemoryPool,

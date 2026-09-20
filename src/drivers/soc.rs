@@ -1,7 +1,9 @@
 //! SG2002 / CV181x SoC 外设 MMIO **物理基址** 一览。
 //!
-//! 常量按物理地址升序排列。各驱动模块通过 `// (moved) pub use crate::drivers::soc::…` 保持原有路径的兼容性；
-//! 新代码请优先使用本模块中的常量。
+//! 常量按物理地址升序排列;TOP 块寄存器视图（与 JPU 共享）也在本模块。
+//! USB 平台专用视图（CLKGEN/IOBLK）已收集到 `crate::platform`。
+
+use tock_registers::{register_bitfields, register_structs, registers::ReadWrite};
 
 // 0x020B_xxxx — 多核 / 安全子系统
 
@@ -29,24 +31,7 @@ pub const GPIO1_BASE: usize = 0x0302_1000;
 /// DWC2 USB OTG 控制器物理基址（DTS `usb@04340000` 第一段 `reg`）
 pub const DWC2_BASE: usize = 0x0434_0000;
 
-// 0x0502_xxxx — No-die / RTC 域
-
-// tock-registers 视图（本驱动使用到的时钟/复位/pinmux 块）
-use tock_registers::{register_bitfields, register_structs, registers::ReadWrite};
-
 register_bitfields![u32,
-    /// CLKGEN 时钟使能寄存器 1（bit28-31: USB 相关时钟门控）。
-    pub CLKGEN_EN1 [
-        USB_CLK OFFSET(28) NUMBITS(4) [],
-    ],
-    /// CLKGEN 时钟使能寄存器 2。
-    pub CLKGEN_EN2 [
-        EN OFFSET(0) NUMBITS(1) [],
-    ],
-    /// CLKGEN bypass 0（bit17/18: USB PHY bypass）。
-    pub CLKGEN_BYP0 [
-        USB_BYPASS OFFSET(17) NUMBITS(2) [],
-    ],
     /// TOP 复位寄存器（bit4: JPEG 复位释放; bit11: USB 复位）。
     pub TOP_RST [
         JPEG OFFSET(4) NUMBITS(1) [],
@@ -63,17 +48,6 @@ register_bitfields![u32,
     ],
 ];
 
-register_structs! {
-    /// CLKGEN 时钟生成器。
-    pub ClkgenRegs {
-        (0x000 => _reserved000),
-        (0x004 => pub en1: ReadWrite<u32, CLKGEN_EN1::Register>),
-        (0x008 => pub en2: ReadWrite<u32, CLKGEN_EN2::Register>),
-        (0x00c => _reserved00c: [u32; 9]),
-        (0x030 => pub byp0: ReadWrite<u32, CLKGEN_BYP0::Register>),
-        (0x034 => @END),
-    }
-}
 
 register_structs! {
     /// TOP 级控制（复位/USB pin/ECO）。
@@ -96,12 +70,4 @@ pub fn top() -> &'static TopRegs {
     unsafe { &*(TOP_BASE as *const TopRegs) }
 }
 
-register_structs! {
-    /// IOBLK Group1 pad 配置。
-    pub IoblkG1Regs {
-        (0x000 => _reserved000: [u32; 8]),
-        (0x020 => pub usb_vbus_det: ReadWrite<u32>),
-        (0x024 => @END),
-    }
-}
 

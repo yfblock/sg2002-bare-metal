@@ -15,6 +15,9 @@
 //! (Dekker 行锁整行一次 + `\n`→`\r\n` + mute 门控)。
 
 use core::fmt::Write as _;
+use core::sync::atomic::Ordering;
+
+use crate::drivers::mailbox::{CTX_SLOT2, CTX_SLOT3};
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::{ReadOnly, WriteOnly};
@@ -61,7 +64,6 @@ pub(crate) fn uart_putc(c: u8) {
 //   flag_small @ slot2 低4B(只小核写)/ flag_big @ slot2 高4B(只大核写)
 //   turn       @ slot3 低4B(双方写,竞争时决定谁让行)
 // 两侧实现必须同款(大核侧 tools/bigcore-bm/src/main.rs)。
-use crate::drivers::mailbox::{CTX_SLOT2, CTX_SLOT3};
 const ME: usize = 1; // 小核 = 1;大核 = 0
 const LOCK_SPIN_LIMIT: u32 = 2_000_000; // 自旋上限;超时强闯(防上电遗留脏值)
 
@@ -77,7 +79,6 @@ static LOCK_HELD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBoo
 
 /// 尝试获锁一次(适合 ISR:失败立即返回 false,绝不等待)
 pub(crate) fn line_lock_try() -> bool {
-    use core::sync::atomic::Ordering;
     if LOCK_HELD.load(Ordering::Acquire) {
         // 本核 main 正持锁(打印中被本核 ISR 打断):绝不嵌套、绝不动旗字
         return false;
@@ -100,7 +101,6 @@ pub(crate) fn line_lock_try() -> bool {
 
 /// 主循环获锁:Dekker 完整让行 + 超时强闯兜底
 pub(crate) fn line_lock_wait() {
-    use core::sync::atomic::Ordering;
     unsafe {
         core::ptr::write_volatile(flag_addr(ME) as *mut u32, 1);
         riscv::asm::fence();
@@ -130,7 +130,6 @@ pub(crate) fn line_lock_wait() {
 
 /// 放锁:把 turn 让给对方,再降旗
 pub(crate) fn line_unlock() {
-    use core::sync::atomic::Ordering;
     LOCK_HELD.store(false, Ordering::Release);
     unsafe {
         riscv::asm::fence();
@@ -193,7 +192,6 @@ static LOGGER: UartLogger = UartLogger;
 static INIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 pub fn init() {
-    use core::sync::atomic::Ordering;
     if INIT.swap(true, Ordering::SeqCst) {
         return;
     }

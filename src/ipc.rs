@@ -14,6 +14,7 @@ use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::ReadWrite;
 
 use crate::drivers::mailbox as hw;
+use crate::logger;
 
 // DRAM 邮箱（32 字节，tock-registers 视图）
 
@@ -165,7 +166,6 @@ pub fn handle_mailbox_irq() {
         } else if !muted() {
             // ISR 上下文:try 锁一次,拿不到就丢这行回显(绝不等待,防 ISR 延迟);
             // 三段输出拼在一次锁窗口内,保证 [MB-RX] 行不被大核打断
-            use crate::logger;
             if logger::line_lock_try() {
                 logger::print_fmt_nolock(format_args!("[MB-RX] big->small msg={:#x}\n", msg));
                 logger::line_unlock();
