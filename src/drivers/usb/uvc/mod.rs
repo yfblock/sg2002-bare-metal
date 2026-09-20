@@ -13,11 +13,11 @@
 pub mod setup;
 pub mod descriptor;
 pub mod control;
+pub mod session;
 pub mod stream;
 pub mod capture;
 
-// 重导出仅保留跨模块消费项（uvc/ 之外经 `uvc::X` 路径使用的）。
-pub use capture::{uvc_capture_one_frame, UVC_ASSEMBLED_JPEG_DMA_OFF};
-pub use control::uvc_init_camera_controls;
-pub use descriptor::{parse_uvc_control_entities, parse_uvc_video_stream, read_configuration_descriptor, UvcPrefs, UvcStreamSelection};
-pub use stream::uvc_start_video_stream;
+// 重导出仅保留跨模块消费项:会话门面 + DMA 偏移(main 取 JPEG 切片用) + 选流偏好。
+pub use capture::UVC_ASSEMBLED_JPEG_DMA_OFF;
+pub use descriptor::UvcPrefs;
+pub use session::{open, UvcCamera};

@@ -1,0 +1,56 @@
+//! UVC 会话：从 [`UsbDevice`] 建立可抓帧的摄像头会话，封装全部协议编排
+//! （读配置描述符 → 解析流/控制实体 → 相机调校 → PROBE/COMMIT → 启动
+//! → warmup），应用层不再接触 `ep0`/`sel` 细节。
+//!
+//! 与 [`super::device`] 类驱动的分工：`UvcCameraDriver::probe` 在拓扑遍历
+//! **中途**只做轻量匹配记录（枚举时做重 I/O 初始化会连累整树遍历）；
+//! 本模块的 [`open`] 在遍历**结束后**做重初始化——匹配 ≠ 就绪。
+
+use crate::drivers::usb::device::UsbDevice;
+use crate::drivers::usb::error::UsbResult;
+
+use super::descriptor::{self, UvcStreamSelection};
+use super::capture;
+use super::{control, stream};
+use crate::drivers::usb::dwc2::Ep0;
+
+/// 已建立的 UVC 摄像头会话：设备 + 选定的流参数。
+///
+/// 抓帧走 [`capture_frame`]；构造见 [`open`]。
+pub struct UvcCamera {
+    ep0: Ep0,
+    sel: UvcStreamSelection,
+}
+
+/// 打开摄像头会话：`open_camera` 的简写（偏好全默认时）。
+///
+/// # 参数
+/// - `dev`：枚举得到的 UVC 设备。
+/// - `prefs`：选流偏好（帧尺寸/帧率）。
+pub fn open(dev: &UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera> {
+    let ep0 = dev.ep0;
+
+    // 配置描述符 → 有效切片(wTotalLength 截断)
+    let cfg_buf = descriptor::read_configuration_descriptor(&ep0, 1)?;
+    let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
+    let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
+
+    let mut sel = descriptor::parse_uvc_video_stream(cfg, cfg_total, prefs)?;
+
+    // 相机调校(自动白平衡/50Hz/AE;失败不阻塞——按出厂默认继续)
+    if let Some(ent) = descriptor::parse_uvc_control_entities(cfg, cfg_total) {
+        let _ = control::uvc_init_camera_controls(&ep0, &ent);
+    }
+
+    stream::uvc_start_video_stream(&ep0, &mut sel)?;
+    let _ = capture::uvc_capture_one_frame(&ep0, &sel); // warmup:丢弃首帧
+
+    Ok(UvcCamera { ep0, sel })
+}
+
+impl UvcCamera {
+    /// 抓一帧 MJPEG，返回帧长（字节）。
+    pub fn capture_frame(&self) -> UsbResult<usize> {
+        capture::uvc_capture_one_frame(&self.ep0, &self.sel)
+    }
+}

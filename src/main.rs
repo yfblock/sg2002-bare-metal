@@ -41,7 +41,7 @@ mod ipc;
 mod platform;
 mod drivers;
 
-use crate::drivers::usb::{dwc2::{self, Ep0}, uvc};
+use crate::drivers::usb::{dwc2, uvc};
 use crate::drivers::usb::enumerate_camera;
 
 const FPS_REPORT_EVERY: u32 = 100;
@@ -56,32 +56,21 @@ pub(crate) extern "C" fn rust_main() -> ! {
     platform::platform_init();
     unsafe { arch::trap::init_interrupts() };
 
-    // UVC 初始化(同步,一次性)
+    // UVC 初始化(同步,一次性):枚举 → 打开会话,协议编排全部在 uvc 模块内
     let cam = enumerate_camera().expect("enum");
     logger::print_fmt(format_args!(
         "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
         cam.vid, cam.pid, cam.ep0.dev(), cam.speed.as_str()
     ));
-    let ep0 = cam.ep0;
-
-    let cfg_buf = uvc::read_configuration_descriptor(&ep0, 1).expect("read cfg");
-    let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
-    let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
     let prefs = uvc::UvcPrefs {
         frame_w: 640,
         frame_h: 480,
         frame_interval: 333_333, // ≈30fps:给廉价 webcam 更多曝光/ISP 余量
     };
-    let mut sel = uvc::parse_uvc_video_stream(cfg, cfg_total, &prefs).expect("parse stream");
-
-    if let Some(ent) = uvc::parse_uvc_control_entities(cfg, cfg_total) {
-        let _ = uvc::uvc_init_camera_controls(&ep0, &ent);
-    }
-    uvc::uvc_start_video_stream(&ep0, &mut sel).expect("start stream");
-    let _ = uvc::uvc_capture_one_frame(&ep0, &sel); // warmup
+    let camera = uvc::open(&cam, &prefs).expect("open camera");
 
     // 进入主循环(永不返回)
-    pipeline_loop(&ep0, &sel)
+    pipeline_loop(&camera)
 }
 
 /// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
@@ -112,7 +101,7 @@ impl PipelineStats {
 /// 主循环:capture → JPU decode → IVE CSC → mailbox notify。
 ///
 /// `ep0`/`sel` 由 rust_main 的初始化阶段产生。
-fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
+fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
     let mut st = PipelineStats::new();
 
     loop {
@@ -122,7 +111,7 @@ fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
         }
 
         let t_cap0 = crate::arch::time::rdtime();
-        match uvc::uvc_capture_one_frame(ep0, sel) {
+        match camera.capture_frame() {
             Ok(n) => {
                 st.frames = st.frames.wrapping_add(1);
                 st.cap += crate::arch::time::elapsed_since(t_cap0);
