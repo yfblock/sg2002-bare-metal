@@ -10,6 +10,9 @@ pub mod regs;
 
 pub use decoder::JpuDecoder;
 
+mod session;
+pub use session::{decode_to_shared, reset_count};
+
 /// `UnsafeCell` + `Sync`：裸机单核安全持有可变全局。
 pub(crate) struct SyncUnsafeCell<T>(pub(crate) core::cell::UnsafeCell<T>);
 unsafe impl<T> Sync for SyncUnsafeCell<T> {}

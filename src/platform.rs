@@ -37,6 +37,18 @@ pub const IVE_BASE: usize = 0x0A0A_0000;
 /// JPU JPEG 编解码器。
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
 
+// 预留 rtos 区共享布局（镜像加载/入口 0x8FE00000 由 memory.ld 定;区段 [0x8FE00000, 0x90000000) dtb rtos_region,
+// 大核不分配;见 memory.ld 与 yuv_buf.rs 平面几何说明）
+/// YUV 单缓冲（JPU DMA 直写;640×480 YUV422 = 614400B）。
+pub const YUV_BUF_PA: usize = 0x8FE8_8000;
+/// YUV 缓冲容量（摄像头实际发 YUV422,frame_size = w*h*2）。
+pub const YUV_BUF_SIZE: usize = 614400;
+/// JPU DMA 内存池（stream_buf;YUV 缓冲之后避免重叠）。
+pub const JPU_POOL_PA: usize = 0x8FF1_E000;
+pub const JPU_POOL_SIZE: usize = 0x0004_0000; // 256KB
+/// RGB888 planar 输出（IVE CSC 输出;三平面各 307200B）。
+pub const RGB_BUF_PA: usize = 0x8FF5_E000;
+
 // 模块常量
 const VBUS_GPIO_PIN: u8 = 6;
 const VBUS_GPIO_ACTIVE_HIGH: bool = true;

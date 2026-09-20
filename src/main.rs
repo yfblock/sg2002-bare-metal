@@ -7,7 +7,6 @@
 //! ```text
 //! src/
 //! ├── main.rs       入口:初始化 → 主循环(capture → decode+IVE → notify)
-//! ├── jpu.rs        JPU 解码封装(使用 drivers/jpu)
 //! ├── arch/         架构层(RV64 M-mode C906L)
 //! │   └── asm.S     _start 启动块 + _trap_entry 上下文块(mod.rs 里 global_asm! 引入)
 //! │   ├── trap      M-mode trap 入口/分发 + mtvec/mie 初始化
@@ -18,7 +17,8 @@
 //! ├── logger.rs     跨核 UART 控制台(DW8250 + 打印 + Dekker 行锁)+ log 门面
 //! ├── yuv_buf.rs    共享 YUV/RGB 缓冲布局
 //! ├── panic.rs      panic handler
-//! ├── platform.rs   板级(SG2002):SoC MMIO 地址表 + USB PHY/时钟/VBUS/pinmux 初始化
+//! ├── platform.rs   板级(SG2002):SoC MMIO 地址表 + rtos 区布局 + USB 平台初始化
+//! ├── yuv_buf.rs    共享 YUV/RGB 平面几何(地址见 platform)
 //! └── drivers/      从 sg200x-bsp 迁移的硬件驱动
 //!     ├── mailbox   cvi 硬件邮箱控制器(门铃/认领/跨核锁槽)
 //!     ├── wdt        DW APB 看门狗(wedge 自愈复位)
@@ -37,7 +37,6 @@
 mod arch;
 
 // 应用层
-mod jpu;
 mod yuv_buf;
 mod logger;
 mod panic;
@@ -164,15 +163,15 @@ fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) 
     };
 
     let t_dec0 = crate::arch::time::rdtime();
-    let decoded = jpu::decode_to_shared(jpeg);
+    let decoded = crate::drivers::jpu::decode_to_shared(jpeg);
     st.dec += crate::arch::time::elapsed_since(t_dec0);
 
     match decoded {
         Ok((w, h, len)) => {
 
             // IVE 硬件 CSC
-            let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(yuv_buf::YUV_BUF_PA, w, h);
-            let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(yuv_buf::RGB_BUF_PA, w, h);
+            let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
+            let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
             let t_ive0 = crate::arch::time::rdtime();
             if let Err(_e) = crate::drivers::ive::csc_yuv420_to_rgb888(
                 y_pa, u_pa, v_pa, w, w / 2,
@@ -181,7 +180,7 @@ fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) 
             }
             st.ive += crate::arch::time::elapsed_since(t_ive0);
 
-            let reported = len.min(yuv_buf::YUV_BUF_SIZE);
+            let reported = len.min(platform::YUV_BUF_SIZE);
             let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
                 | ipc::FLAG_YUV_READY
                 | ipc::encode_dims(w, h);
@@ -232,7 +231,7 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
         per_frame(crate::drivers::jpu::trace::take_step_time(
             crate::drivers::jpu::trace::step::CLEAN_STREAM)),
         crate::drivers::usb::dwc2::take_usb_isr_count(),
-        jpu::reset_count(),
+        crate::drivers::jpu::reset_count(),
     ));
 
     st.cap = core::time::Duration::ZERO;

@@ -2,23 +2,8 @@
 //!
 //! JPU 解码 YUV420 → IVE 硬件转 RGB888 → 大核通过 mmap 读 RGB。
 //!
-//! 内存布局（rtos_region 2MB 内）：
-//! ```text
-//!   小核镜像    0x8FE00000  ~552KB
-//!   YUV 单缓冲  0x8FE88000  460800 B (640x480 YUV420)
-//!   JPU pool    0x8FEF8800  256KB (stream_buf only)
-//!   RGB 输出    0x8FF38800  921600 B (640x480 RGB888 planar)
-//!   spare       0x8FFE0800  ~129KB → mailbox 0x90040000 / stats 0x90040040
-//! ```
+//! 布局常量在 `crate::platform` 的「预留 rtos 区共享布局」段(单一事实来源)。
 
-/// YUV420 帧缓冲物理地址（JPU DMA 直写）。
-pub const YUV_BUF_PA: usize = 0x8FE8_8000;
-/// YUV 帧缓冲容量。摄像头实际发 YUV422(fmt=1)，JPU frame_size=614400。
-pub const YUV_BUF_SIZE: usize = 614400;
-
-/// RGB888 planar 输出缓冲物理地址（IVE CSC 输出）。
-/// R/G/B 三个平面各 640×480 = 307200，共 921600。
-pub const RGB_BUF_PA: usize = 0x8FF5_E000;
 
 /// 取 YUV 的 Y/U/V 平面地址。
 ///

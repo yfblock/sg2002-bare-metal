@@ -1,38 +1,20 @@
-//! 小核 JPU 解码封装：把抓到的 MJPEG 经 sg200x-bsp 的 `JpuDecoder` 解码成
-//! YUV420，写入共享 DRAM 的指定 slot。
+//! JPU 解码会话：decoder 单例 + 预留区 pool + wedge 自恢复。
 //!
-//! 关键点：
-//! - DMA pool 放在**预留 rtos 区**固定物理地址 `0x8FF00000`（896 KiB），**不**用
-//!   .bss 静态缓冲——1 MiB 静态 pool 会让小核 .bss 膨胀到 ~2.4 MiB，清 bss 时会
-//!   踩到 U-Boot 堆（U-Boot 启动小核后还要 malloc 加载 starryos.uimg）→ U-Boot
-//!   崩溃复位整片 SoC。预留区是大核 dtb 不碰的 DRAM，小核 identity 映射可直接用。
-//! - 用 `new_at_no_vd_remap_with_pool`：设 JPU 时钟/复位/VC + 软复位，但**不设
-//!   VD_REMAP**——VD_REMAP 会把 32 位 DMA 地址扩成 40 位，超出 256MB DDR 范围。
-//!   且不写 `TOP_DDR_ADDR_MODE_OFF`（那会改大核 DDR 映射导致大核崩溃）。
-//! - **wedge 自恢复**：已知 JPU 连续解码 ~94 帧后超时 wedged 且超时后不复位。
-//!   解码返回 Err 时，drop 旧 decoder（释放 stream/frame buf）并重建——重建会重跑
-//!   `hardware_init_at_no_vd_remap`（含软复位 `wait_sw_reset_done_at`），下一帧可续跑。
-//!
-//! 预留区 [0x8FE00000, 0x90000000)（2MB）布局：
-//!   YUV slot0 [0x8FE00000, 0x8FE80000) 512K
-//!   YUV slot1 [0x8FE80000, 0x8FF00000) 512K
-//!   JPU pool  [0x8FF00000, 0x8FFE0000) 896K
-//!   (gap)     [0x8FFE0000, 0x90040000) 64K
-//!   mailbox   [0x90040000, 0x8FFFE020) 32B
+//! - DMA pool 用**预留 rtos 区**固定物理地址（`platform::JPU_POOL_PA`）,不用
+//!   .bss 静态缓冲——大静态 pool 会让清 bss 踩到 U-Boot 堆(小核启动后 U-Boot
+//!   还要 malloc 加载大核镜像)→ 整片复位。
+//! - `new_at_no_vd_remap_with_pool`:设时钟/复位/VC + 软复位但**不设 VD_REMAP**
+//!   (32 位 DMA 地址扩 40 位会超 256MB DDR;改 DDR 映射会崩大核)。
+//! - **wedge 自恢复**:解码 Err 时 drop 旧 decoder 重建(重跑硬件 init + 软复位),
+//!   下一帧续跑。日志直走 logger 控制台而非 log 门面——wedge 诊断需在
+//!   `LevelFilter::Off` 下依然可见。
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::drivers::jpu::JpuDecoder;
-
+use super::JpuDecoder;
+use super::SyncUnsafeCell;
 use crate::logger;
-use crate::yuv_buf;
-
-/// JPU DMA 内存池物理地址。YUV 缓冲之后，避免重叠。
-/// YUV: 0x8FE88000 + 614400(0x96000) = 0x8FF1E000
-const JPU_POOL_PA: usize = 0x8FF1_E000;
-const JPU_POOL_SIZE: usize = 0x0004_0000; // 256KB
-
-use crate::drivers::jpu::SyncUnsafeCell;
+use crate::platform::{JPU_POOL_PA, JPU_POOL_SIZE, YUV_BUF_PA, YUV_BUF_SIZE};
 
 static DECODER: SyncUnsafeCell<Option<JpuDecoder>> = SyncUnsafeCell::new(None);
 
@@ -77,7 +59,7 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
     }
 
     let decoder = cell.as_mut().expect("decoder present");
-    unsafe { decoder.set_output_buffer(yuv_buf::YUV_BUF_PA, yuv_buf::YUV_BUF_SIZE) };
+    unsafe { decoder.set_output_buffer(YUV_BUF_PA, YUV_BUF_SIZE) };
     match decoder.decode(jpeg) {
         Ok(result) => {
             // 数据已由 JPU 直接 DMA 进共享缓冲，无需再搬。
