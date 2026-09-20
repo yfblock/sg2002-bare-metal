@@ -31,16 +31,16 @@ pub fn platform_init() {
 }
 
 unsafe fn enable_usb_clocks_cv181x() {
-    let b = CLKGEN_BASE;
-    let en1 = (b + 0x004) as *mut u32;
-    let en2 = (b + 0x008) as *mut u32;
-    let byp0 = (b + 0x030) as *mut u32;
+    let clk = CLKGEN_BASE;
+    let en1 = (clk + 0x004) as *mut u32;
+    let en2 = (clk + 0x008) as *mut u32;
+    let byp0 = (clk + 0x030) as *mut u32;
     unsafe {
-        let v1 = read_volatile(en1);
-        let v2 = read_volatile(en2);
+        let en1_val = read_volatile(en1);
+        let en2_val = read_volatile(en2);
         let byp = read_volatile(byp0);
-        write_volatile(en1, v1 | (0xFu32 << 28));
-        write_volatile(en2, v2 | 1u32);
+        write_volatile(en1, en1_val | (0xFu32 << 28));
+        write_volatile(en2, en2_val | 1u32);
         write_volatile(byp0, byp & !((1u32 << 17) | (1u32 << 18)));
     }
 }
@@ -50,18 +50,18 @@ unsafe fn cvitek_usb_top_host_bringup() {
     let top = TOP_BASE;
     let rst = (top + 0x3000) as *mut u32;
     unsafe {
-        let v = read_volatile(rst);
-        write_volatile(rst, v & !(1 << 11));
+        let rst_val = read_volatile(rst);
+        write_volatile(rst, rst_val & !(1 << 11));
         crate::arch::time::delay(core::time::Duration::from_micros(50));
-        write_volatile(rst, v | (1 << 11));
+        write_volatile(rst, rst_val | (1 << 11));
         crate::arch::time::delay(core::time::Duration::from_micros(50));
 
         let usb_pin = (top + 0x48) as *mut u32;
-        let x = read_volatile(usb_pin);
-        let dev_mode = (x & !0xC0u32) | 0xC0u32 | 0x01u32;
+        let pin = read_volatile(usb_pin);
+        let dev_mode = (pin & !0xC0u32) | 0xC0u32 | 0x01u32;
         write_volatile(usb_pin, dev_mode);
         crate::arch::time::delay(core::time::Duration::from_millis(1));
-        let host_mode = (x & !0xC0u32) | 0x40u32 | 0x01u32;
+        let host_mode = (pin & !0xC0u32) | 0x40u32 | 0x01u32;
         write_volatile(usb_pin, host_mode);
         crate::arch::time::delay(core::time::Duration::from_millis(1));
 
@@ -76,10 +76,10 @@ fn pinmux_usb_vbus_det_gpio_output_prep() {
         .usb_vbus_det
         .write(pinmux::FSEL::VAL::XGPIOB_6);
     // IOBLK G1:USB_VBUS_DET pad 驱动能力拉满(bits[7:5]=7,7=最强档)
-    let r = (IOBLK_G1_PADDR + IOBLK_G1_USB_VBS_DET_OFF) as *mut u32;
+    let drv = (IOBLK_G1_PADDR + IOBLK_G1_USB_VBS_DET_OFF) as *mut u32;
     unsafe {
-        let v = read_volatile(r);
-        write_volatile(r, v | (7 << 5));
+        let cur = read_volatile(drv);
+        write_volatile(drv, cur | (7 << 5));
     }
 }
 

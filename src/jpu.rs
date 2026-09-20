@@ -44,13 +44,13 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
     // SAFETY: 小核 identity 映射（VA=PA），pool 在预留 rtos 区（普通 DRAM，JPU DMA
     // 可达，32 位地址不需 VD_REMAP）；JPU/TOP/VC 为物理 MMIO 基址，identity 下直访。
     unsafe {
-        let mut d = JpuDecoder::new_at_no_vd_remap_with_pool(
+        let mut decoder = JpuDecoder::new_at_no_vd_remap_with_pool(
             JPU_POOL_PA,
             JPU_POOL_SIZE,
         )?;
         // 不在这里固定 output_buffer —— 由 set_output_slot() 每帧交替指向 slot 0/1。
-        d.set_cpu_reads_output(false);
-        Ok(d)
+        decoder.set_cpu_reads_output(false);
+        Ok(decoder)
     }
 }
 
@@ -65,9 +65,9 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
     let cell = unsafe { &mut *DECODER.0.get() };
     if cell.is_none() {
         match create_decoder() {
-            Ok(d) => {
+            Ok(new_decoder) => {
                 logger::print("[JPU] decoder initialized\n");
-                *cell = Some(d);
+                *cell = Some(new_decoder);
             }
             Err(e) => {
                 logger::print("[JPU] init failed: ");
@@ -87,14 +87,14 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
         }
         Err(e) => {
             // wedge / 解码错误：drop 旧 decoder 并重建（重跑硬件 init + 软复位）。
-            let n = RESET_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+            let resets = RESET_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             // 节流：第 1、每 16 次打印一次，避免冲掉大核串口。
-            if n == 1 || n % 16 == 0 {
-                logger::print_fmt(format_args!("[JPU] decode err={e} reset#{n:#x}\n"));
+            if resets == 1 || resets % 16 == 0 {
+                logger::print_fmt(format_args!("[JPU] decode err={e} reset#{resets:#x}\n"));
             }
             *cell = None; // drop 旧 decoder（释放 stream/frame buf）
             match create_decoder() {
-                Ok(d) => *cell = Some(d),
+                Ok(new_decoder) => *cell = Some(new_decoder),
                 Err(re_err) => {
                     logger::print("[JPU] re-init failed: ");
                     logger::print(re_err);

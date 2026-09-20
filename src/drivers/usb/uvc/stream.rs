@@ -14,23 +14,23 @@ const VS_COMMIT_CONTROL: u8 = 0x02;
 const UVC_PROBE_COMMIT_LEN: usize = 34;
 
 fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT_LEN] {
-    let mut b = [0u8; UVC_PROBE_COMMIT_LEN];
+    let mut buf = [0u8; UVC_PROBE_COMMIT_LEN];
     // 实测 0c45:64ab 等廉价 webcam 不论我们 wCompQuality 设几（1/47/10000），
     // 一旦 bmHint.D3=1 锁定 wCompQuality 就会切到"低质量量化表"（吐 ~21K），
     // 反而比不锁定（吐 ~26K）糟糕。所以这里只锁定 frame interval (D0=1)，
     // 不锁定 wCompQuality (D3=0)，让设备用出厂默认 quality。
-    b[0] = 0x01;
-    b[1] = 0x00;
-    b[2] = sel.format_index;
-    b[3] = sel.frame_index;
-    b[4..8].copy_from_slice(&sel.frame_interval.to_le_bytes());
+    buf[0] = 0x01;
+    buf[1] = 0x00;
+    buf[2] = sel.format_index;
+    buf[3] = sel.frame_index;
+    buf[4..8].copy_from_slice(&sel.frame_interval.to_le_bytes());
     let w = u32::from(sel.frame_w.max(640));
     let h = u32::from(sel.frame_h.max(480));
     let est = if sel.is_mjpeg { w.saturating_mul(h) } else { w.saturating_mul(h).saturating_mul(2) };
-    b[18..22].copy_from_slice(&est.to_le_bytes());
+    buf[18..22].copy_from_slice(&est.to_le_bytes());
     let pkt_total = dwc2::wmax_payload_per_uframe(sel.mps_raw);
-    b[22..26].copy_from_slice(&pkt_total.to_le_bytes());
-    b
+    buf[22..26].copy_from_slice(&pkt_total.to_le_bytes());
+    buf
 }
 
 fn dump_probe(prefix: &str, p: &[u8]) {

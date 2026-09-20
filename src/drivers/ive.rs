@@ -211,85 +211,85 @@ pub fn csc_yuv420_to_rgb888(
     r_pitch: u32,
     width: u32, height: u32,
 ) -> Result<(), &'static str> {
-    let r = regs();
+    let reg = regs();
     let wm1 = width.saturating_sub(1);
     let hm1 = height.saturating_sub(1);
 
     // 1. 软复位 IVE
-    r.top_ctrl1.write(TopCtrl1::SOFTRST::SET);
+    reg.top_ctrl1.write(TopCtrl1::SOFTRST::SET);
     crate::arch::time::delay(Duration::from_micros(10));
-    r.top_ctrl1.write(TopCtrl1::SOFTRST::CLEAR);
+    reg.top_ctrl1.write(TopCtrl1::SOFTRST::CLEAR);
 
     // 2. 图像尺寸
-    r.top_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
+    reg.top_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
 
     // 3. FILTEROP 配置为 CSC，清 3ch/WDMA 使能
-    r.fop_mode.write(FopMode::MODE::CSC);
-    r.fop_en.set(0);
+    reg.fop_mode.write(FopMode::MODE::CSC);
+    reg.fop_en.set(0);
 
     // 4. CSC 系数（12 个 19-bit，软件系数）
     let coefs: [&ReadWrite<u32>; 12] = [
-        &r.csc_c00, &r.csc_c01, &r.csc_c02, &r.csc_off0,
-        &r.csc_c10, &r.csc_c11, &r.csc_c12, &r.csc_off1,
-        &r.csc_c20, &r.csc_c21, &r.csc_c22, &r.csc_off2,
+        &reg.csc_c00, &reg.csc_c01, &reg.csc_c02, &reg.csc_off0,
+        &reg.csc_c10, &reg.csc_c11, &reg.csc_c12, &reg.csc_off1,
+        &reg.csc_c20, &reg.csc_c21, &reg.csc_c22, &reg.csc_off2,
     ];
     for (reg, &c) in coefs.iter().zip(CSC_COEF_BT601_LIMIT.iter()) {
         reg.set(c & 0x7FFFF);
     }
-    r.coef_upd.write(CoefUpd::COEFF_SW_UPDATE::SET);
+    reg.coef_upd.write(CoefUpd::COEFF_SW_UPDATE::SET);
 
     // 5. CSC 使能 + 模式（mode 0 = BT601 limited YUV2RGB）
-    r.csc_ctrl.write(CscCtrl::ENABLE::SET + CscCtrl::ENMODE.val(0));
+    reg.csc_ctrl.write(CscCtrl::ENABLE::SET + CscCtrl::ENMODE.val(0));
 
     // 6. 清 IMG_IN IP
-    r.img_in_ip.write(ImgInIp::IP_CLR_W1T::SET);
+    reg.img_in_ip.write(ImgInIp::IP_CLR_W1T::SET);
     crate::arch::time::delay(Duration::from_micros(10));
-    r.img_in_ip.set(0);
+    reg.img_in_ip.set(0);
 
     // 7. 输入图像配置
-    r.y_pitch.set(y_pitch);
-    r.c_pitch.set(c_pitch);
-    r.img_in_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
-    r.img_in_ctrl.write(
+    reg.y_pitch.set(y_pitch);
+    reg.c_pitch.set(c_pitch);
+    reg.img_in_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
+    reg.img_in_ctrl.write(
         ImgInCtrl::SRC_SEL::DRAM
             + ImgInCtrl::FMT_SEL.val(input_fmt())
             + ImgInCtrl::BURST.val(8)
             + ImgInCtrl::UNDOC16::SET,
     );
-    write_base(&r.y_base_lo, &r.y_base_hi, y_pa as u64);
-    write_base(&r.u_base_lo, &r.u_base_hi, u_pa as u64);
-    write_base(&r.v_base_lo, &r.v_base_hi, v_pa as u64);
-    r.img_upd.write(ImgUpd::SHRD_SEL::SET);
+    write_base(&reg.y_base_lo, &reg.y_base_hi, y_pa as u64);
+    write_base(&reg.u_base_lo, &reg.u_base_hi, u_pa as u64);
+    write_base(&reg.v_base_lo, &reg.v_base_hi, v_pa as u64);
+    reg.img_upd.write(ImgUpd::SHRD_SEL::SET);
 
     // 8. 使能 FILTEROP top
-    r.top_enable.write(TopEnable::IMG_IN::SET + TopEnable::CSC::SET + TopEnable::FILTEROP::SET);
+    reg.top_enable.write(TopEnable::IMG_IN::SET + TopEnable::CSC::SET + TopEnable::FILTEROP::SET);
 
     // 9. 输出 DMA 配置
-    r.out_y_pitch.set(r_pitch);
-    r.out_c_pitch.set(r_pitch);
-    r.out_w_m1.set(wm1 & 0xFFF);
-    r.out_h_m1.set(hm1 & 0xFFF);
-    write_base(&r.r_base_lo, &r.r_base_hi, r_pa as u64);
-    write_base(&r.g_base_lo, &r.g_base_hi, g_pa as u64);
-    write_base(&r.b_base_lo, &r.b_base_hi, b_pa as u64);
-    r.odma_ctrl.write(
+    reg.out_y_pitch.set(r_pitch);
+    reg.out_c_pitch.set(r_pitch);
+    reg.out_w_m1.set(wm1 & 0xFFF);
+    reg.out_h_m1.set(hm1 & 0xFFF);
+    write_base(&reg.r_base_lo, &reg.r_base_hi, r_pa as u64);
+    write_base(&reg.g_base_lo, &reg.g_base_hi, g_pa as u64);
+    write_base(&reg.b_base_lo, &reg.b_base_hi, b_pa as u64);
+    reg.odma_ctrl.write(
         OdmaCtrl::FMT_SEL::RGB888_PLANAR + OdmaCtrl::DMA_BLEN.val(1) + OdmaCtrl::DMA_EN::SET,
     );
 
     // 10. Y/C WDMA 禁用（CSC 走 ODMA）
-    r.fop_en.set(0);
+    reg.fop_en.set(0);
 
     // 11. 清中断状态/使能（不用中断），fmt_vld_fg = 1 启动。
     // （旧代码还向 RO 的 top_status 写 0，无操作意义，已略。）
-    r.top_int_st.set(0);
-    r.top_int_en.set(0);
-    r.top_ctrl1.write(TopCtrl1::FMT_VLD_FG::SET);
+    reg.top_int_st.set(0);
+    reg.top_int_en.set(0);
+    reg.top_ctrl1.write(TopCtrl1::FMT_VLD_FG::SET);
 
     // 12. 轮询完成（top_status 任意 done bit 置位即完成；上限 1s）
     let t0 = rdtime();
     let timeout = Duration::from_millis(1_000);
     loop {
-        if r.top_status.get() != 0 {
+        if reg.top_status.get() != 0 {
             return Ok(());
         }
         if elapsed_since(t0) >= timeout {

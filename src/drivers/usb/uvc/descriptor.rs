@@ -97,21 +97,21 @@ fn choose_frame_interval(
             let lo = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
             let hi = u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
             if lo > 0 && hi > 0 {
-                let v = pref.clamp(lo, hi);
-                best = best_for(v, best);
+                let ival = pref.clamp(lo, hi);
+                best = best_for(ival, best);
             }
         }
         best = best_for(dflt_ival, best);
     } else {
-        let n = ival_type as usize;
-        let mut p = i + 26;
-        for _ in 0..n {
-            if p + 4 > i + bl {
+        let count = ival_type as usize;
+        let mut pos = i + 26;
+        for _ in 0..count {
+            if pos + 4 > i + bl {
                 break;
             }
-            let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
-            best = best_for(v, best);
-            p += 4;
+            let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+            best = best_for(ival, best);
+            pos += 4;
         }
         best = best_for(dflt_ival, best);
     }
@@ -202,13 +202,13 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                     let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
                     if dw_min > 0 { min_ival = dw_min; }
                 } else if ival_type > 0 {
-                    let n = ival_type as usize;
-                    let mut p = i + 26;
-                    for _ in 0..n {
-                        if p + 4 > i + bl { break; }
-                        let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
-                        if v > 0 && v < min_ival { min_ival = v; }
-                        p += 4;
+                    let count = ival_type as usize;
+                    let mut pos = i + 26;
+                    for _ in 0..count {
+                        if pos + 4 > i + bl { break; }
+                        let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+                        if ival > 0 && ival < min_ival { min_ival = ival; }
+                        pos += 4;
                     }
                 }
                 // dwFrameInterval 是 **100ns** 单位，故 fps = 1e7/iv，fps*100 = 1e9/iv。
@@ -222,15 +222,15 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 // 把该 frame 支持的 interval **全列出来**——只看 dflt/min 无法判断
                 // "某个目标帧率到底可选不可选"（离散表只有一档时，任何偏好都是空操作）。
                 if ival_type > 0 {
-                    let mut p = i + 26;
+                    let mut pos = i + 26;
                     for k in 0..ival_type as usize {
-                        if p + 4 > i + bl {
+                        if pos + 4 > i + bl {
                             break;
                         }
-                        let v = u32::from_le_bytes([cfg[p], cfg[p + 1], cfg[p + 2], cfg[p + 3]]);
-                        let f = if v > 0 { 1_000_000_000_u32 / v } else { 0 };
-                        log::info!("UVC:   ival[{}] = {} ({}.{:02} fps)", k, v, f / 100, f % 100);
-                        p += 4;
+                        let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+                        let fps = if ival > 0 { 1_000_000_000_u32 / ival } else { 0 };
+                        log::info!("UVC:   ival[{}] = {} ({}.{:02} fps)", k, ival, fps / 100, fps % 100);
+                        pos += 4;
                     }
                 } else if bl >= 38 {
                     let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);

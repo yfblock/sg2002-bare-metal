@@ -146,12 +146,12 @@ impl JpuDecoder {
         super::trace::mark_timed(super::trace::step::INV_AFTER);
         }
 
-        let r = DecodeResult {
+        let result = DecodeResult {
             width: header_info.width,
             height: header_info.height,
             yuv_data: phys_slice(self.frame_buf.addr, frame_size),
         };
-        Ok(r)
+        Ok(result)
     }
 }
 
@@ -248,21 +248,21 @@ fn configure_stream_regs(stream_buf: &PhysBuffer,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
 ) {
-    let r = jpu_regs();
+    let jpu = jpu_regs();
     let stream_phys = stream_buf.addr as u32; // identity(VA=PA)
     let stream_end = (stream_buf.addr + copy_len) as u32;
 
-    r.bbc_bas_addr.write(VALUE32::VAL.val(stream_phys));
-    r.bbc_end_addr.write(VALUE32::VAL.val(stream_end));
-    r.bbc_rd_ptr.write(VALUE32::VAL.val(stream_phys));
-    r.bbc_wr_ptr.write(VALUE32::VAL.val(stream_end));
+    jpu.bbc_bas_addr.write(VALUE32::VAL.val(stream_phys));
+    jpu.bbc_end_addr.write(VALUE32::VAL.val(stream_end));
+    jpu.bbc_rd_ptr.write(VALUE32::VAL.val(stream_phys));
+    jpu.bbc_wr_ptr.write(VALUE32::VAL.val(stream_end));
 
     let strm_pages = copy_len.div_ceil(256);
-    r.bbc_strm_ctrl.set(bbc_strm_ctrl_value(strm_pages as u32));
+    jpu.bbc_strm_ctrl.set(bbc_strm_ctrl_value(strm_pages as u32));
 
-    r.gbu_tt_cnt.write(VALUE32::VAL.val(0));
-    r.gbu_tt_cnt_h.write(VALUE32::VAL.val(0));
-    r.pic_errmb.write(VALUE32::VAL.val(0));
+    jpu.gbu_tt_cnt.write(VALUE32::VAL.val(0));
+    jpu.gbu_tt_cnt_h.write(VALUE32::VAL.val(0));
+    jpu.pic_errmb.write(VALUE32::VAL.val(0));
 
     let mut huff_dc_idx = 0u32;
     let mut huff_ac_idx = 0u32;
@@ -270,56 +270,56 @@ fn configure_stream_regs(stream_buf: &PhysBuffer,
         huff_dc_idx = (huff_dc_idx << 1) | header.dc_huff_tbl[i] as u32;
         huff_ac_idx = (huff_ac_idx << 1) | header.ac_huff_tbl[i] as u32;
     }
-    r.pic_ctrl.set(pic_ctrl_value(huff_dc_idx, huff_ac_idx));
+    jpu.pic_ctrl.set(pic_ctrl_value(huff_dc_idx, huff_ac_idx));
 
-    r.pic_size.write(
+    jpu.pic_size.write(
         MJPEG_PIC_SIZE::WIDTH.val(layout.aligned_width)
             + MJPEG_PIC_SIZE::HEIGHT.val(layout.aligned_height),
     );
-    r.rot_info.write(VALUE32::VAL.val(0));
-    r.mcu_info.write(VALUE32::VAL.val((layout.mcu_block_num << 16) | (header.num_components << 12) | layout.comp_info));
-    r.dpb_config.write(VALUE32::VAL.val(0));
-    r.rst_intval.write(VALUE32::VAL.val(header.restart_interval));
-    r.scl_info.write(VALUE32::VAL.val(0));
-    r.op_info.write(VALUE32::VAL.val(layout.bus_req_num));
+    jpu.rot_info.write(VALUE32::VAL.val(0));
+    jpu.mcu_info.write(VALUE32::VAL.val((layout.mcu_block_num << 16) | (header.num_components << 12) | layout.comp_info));
+    jpu.dpb_config.write(VALUE32::VAL.val(0));
+    jpu.rst_intval.write(VALUE32::VAL.val(header.restart_interval));
+    jpu.scl_info.write(VALUE32::VAL.val(0));
+    jpu.op_info.write(VALUE32::VAL.val(layout.bus_req_num));
 }
 
 fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs();
+    let jpu = jpu_regs();
 
-    r.huff_ctrl
+    jpu.huff_ctrl
         .write(MJPEG_HUFF_CTRL::PHASE.val(HUFF_PHASE_MIN));
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].min_codes[j];
             let temp = HuffTable::sign_extend_16(huff_data);
-            r.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
+            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
 
-    r.huff_ctrl
+    jpu.huff_ctrl
         .write(MJPEG_HUFF_CTRL::PHASE.val(HUFF_PHASE_MAX));
-    r.huff_addr.write(VALUE32::VAL.val(HUFF_ADDR_MAX));
+    jpu.huff_addr.write(VALUE32::VAL.val(HUFF_ADDR_MAX));
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].max_codes[j];
             let temp = HuffTable::sign_extend_16(huff_data);
-            r.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
+            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
 
-    r.huff_ctrl
+    jpu.huff_ctrl
         .write(MJPEG_HUFF_CTRL::PHASE.val(HUFF_PHASE_PTR));
-    r.huff_addr.write(VALUE32::VAL.val(HUFF_ADDR_PTR));
+    jpu.huff_addr.write(VALUE32::VAL.val(HUFF_ADDR_PTR));
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].ptrs[j] as u32;
             let temp = HuffTable::sign_extend_8(huff_data);
-            r.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | huff_data));
+            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | huff_data));
         }
     }
 
-    r.huff_ctrl
+    jpu.huff_ctrl
         .write(MJPEG_HUFF_CTRL::PHASE.val(HUFF_PHASE_VAL));
     for &table_idx in &[0, 2, 1, 3] {
         let is_dc = table_idx == 0 || table_idx == 2;
@@ -333,19 +333,19 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
         for j in 0..count.min(header.huff_tables[table_idx].num_values) {
             let val = header.huff_tables[table_idx].values[j] as u32;
             let temp = HuffTable::sign_extend_8(val);
-            r.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | val));
+            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | val));
         }
         for _ in count..max_count {
-            r.huff_data.write(VALUE32::VAL.val(0xFFFF_FFFF));
+            jpu.huff_data.write(VALUE32::VAL.val(0xFFFF_FFFF));
         }
     }
 
-    r.huff_ctrl.write(MJPEG_HUFF_CTRL::PHASE.val(0));
+    jpu.huff_ctrl.write(MJPEG_HUFF_CTRL::PHASE.val(0));
     Ok(())
 }
 
 fn upload_quant_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs();
+    let jpu = jpu_regs();
     let qmat_phases = [QMAT_PHASE_Y, QMAT_PHASE_CB, QMAT_PHASE_CR];
     let comp_count = (header.num_components as usize).min(3);
     for (comp_idx, &phase) in qmat_phases.iter().enumerate().take(comp_count) {
@@ -354,17 +354,17 @@ fn upload_quant_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
             continue;
         }
 
-        r.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(phase));
+        jpu.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(phase));
         for j in 0..64 {
-            r.qmat_data.write(VALUE32::VAL.val(header.quant_tables[table_idx].values[j] as u32));
+            jpu.qmat_data.write(VALUE32::VAL.val(header.quant_tables[table_idx].values[j] as u32));
         }
-        r.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(0));
+        jpu.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(0));
     }
     Ok(())
 }
 
 fn gram_setup(stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs();
+    let jpu = jpu_regs();
     let ecs_offset = header.ecs_offset;
     let page_ptr = ecs_offset >> 8;
     let mut word_ptr = (ecs_offset & 0xF0) >> 2;
@@ -379,31 +379,31 @@ fn gram_setup(stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'stati
 
     for i in 0..2 {
         let cur_page = page_ptr + i;
-        r.bbc_cur_pos.write(VALUE32::VAL.val(cur_page as u32));
-        r.bbc_ext_addr.write(VALUE32::VAL.val((stream_phys as u32) + ((cur_page as u32) << 8)));
-        r.bbc_int_addr.write(VALUE32::VAL.val(((cur_page & 1) as u32) << 6));
-        r.bbc_data_cnt.write(VALUE32::VAL.val(256 / 4));
-        r.bbc_command.write(VALUE32::VAL.val(0));
+        jpu.bbc_cur_pos.write(VALUE32::VAL.val(cur_page as u32));
+        jpu.bbc_ext_addr.write(VALUE32::VAL.val((stream_phys as u32) + ((cur_page as u32) << 8)));
+        jpu.bbc_int_addr.write(VALUE32::VAL.val(((cur_page & 1) as u32) << 6));
+        jpu.bbc_data_cnt.write(VALUE32::VAL.val(256 / 4));
+        jpu.bbc_command.write(VALUE32::VAL.val(0));
         wait_bbc_idle();
     }
 
-    r.bbc_cur_pos.write(VALUE32::VAL.val((page_ptr + 2) as u32));
-    r.bbc_ctrl.write(VALUE32::VAL.val(1));
+    jpu.bbc_cur_pos.write(VALUE32::VAL.val((page_ptr + 2) as u32));
+    jpu.bbc_ctrl.write(VALUE32::VAL.val(1));
 
-    r.gbu_wd_ptr.write(VALUE32::VAL.val(word_ptr as u32));
-    r.gbu_bbsr.write(VALUE32::VAL.val(0));
-    r.gbu_bber.write(VALUE32::VAL.val(((256 / 4) * 2) - 1));
+    jpu.gbu_wd_ptr.write(VALUE32::VAL.val(word_ptr as u32));
+    jpu.gbu_bbsr.write(VALUE32::VAL.val(0));
+    jpu.gbu_bber.write(VALUE32::VAL.val(((256 / 4) * 2) - 1));
 
     if page_ptr & 1 != 0 {
-        r.gbu_bbir.write(VALUE32::VAL.val(0));
-        r.gbu_bbhr.write(VALUE32::VAL.val(0));
+        jpu.gbu_bbir.write(VALUE32::VAL.val(0));
+        jpu.gbu_bbhr.write(VALUE32::VAL.val(0));
     } else {
-        r.gbu_bbir.write(VALUE32::VAL.val(256 / 4));
-        r.gbu_bbhr.write(VALUE32::VAL.val(256 / 4));
+        jpu.gbu_bbir.write(VALUE32::VAL.val(256 / 4));
+        jpu.gbu_bbhr.write(VALUE32::VAL.val(256 / 4));
     }
 
-    r.gbu_ctrl.write(VALUE32::VAL.val(4));
-    r.gbu_ff_rptr.write(VALUE32::VAL.val(bit_ptr as u32));
+    jpu.gbu_ctrl.write(VALUE32::VAL.val(4));
+    jpu.gbu_ff_rptr.write(VALUE32::VAL.val(bit_ptr as u32));
     Ok(())
 }
 
@@ -411,29 +411,29 @@ fn start_decode(frame_phys: usize,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
 ) -> Result<(), &'static str> {
-    let r = jpu_regs();
-    r.rst_index.write(VALUE32::VAL.val(0));
-    r.rst_count.write(VALUE32::VAL.val(0));
-    r.dpcm_diff_y.write(VALUE32::VAL.val(0));
-    r.dpcm_diff_cb.write(VALUE32::VAL.val(0));
-    r.dpcm_diff_cr.write(VALUE32::VAL.val(0));
+    let jpu = jpu_regs();
+    jpu.rst_index.write(VALUE32::VAL.val(0));
+    jpu.rst_count.write(VALUE32::VAL.val(0));
+    jpu.dpcm_diff_y.write(VALUE32::VAL.val(0));
+    jpu.dpcm_diff_cb.write(VALUE32::VAL.val(0));
+    jpu.dpcm_diff_cr.write(VALUE32::VAL.val(0));
 
     let bit_ptr = (header.ecs_offset & 0xF) << 3;
-    r.gbu_ff_rptr.write(VALUE32::VAL.val(bit_ptr as u32));
-    r.gbu_ctrl.write(VALUE32::VAL.val(3));
+    jpu.gbu_ff_rptr.write(VALUE32::VAL.val(bit_ptr as u32));
+    jpu.gbu_ctrl.write(VALUE32::VAL.val(3));
 
-    r.dpb_base_y.write(VALUE32::VAL.val(frame_phys as u32));
+    jpu.dpb_base_y.write(VALUE32::VAL.val(frame_phys as u32));
     let cb_phys = frame_phys + layout.luma_size;
-    r.dpb_base_cb.write(VALUE32::VAL.val(cb_phys as u32));
+    jpu.dpb_base_cb.write(VALUE32::VAL.val(cb_phys as u32));
     let cr_phys = cb_phys + layout.chroma_size;
-    r.dpb_base_cr.write(VALUE32::VAL.val(cr_phys as u32));
+    jpu.dpb_base_cr.write(VALUE32::VAL.val(cr_phys as u32));
 
-    r.dpb_ystride.write(VALUE32::VAL.val(layout.stride_y));
-    r.dpb_cstride.write(VALUE32::VAL.val(layout.stride_c));
-    r.clp_info.write(VALUE32::VAL.val(0));
+    jpu.dpb_ystride.write(VALUE32::VAL.val(layout.stride_y));
+    jpu.dpb_cstride.write(VALUE32::VAL.val(layout.stride_c));
+    jpu.clp_info.write(VALUE32::VAL.val(0));
 
-    clear_pic_status(r.pic_status.get());
-    r.pic_start.write(MJPEG_PIC_START::START_PIC::SET);
+    clear_pic_status(jpu.pic_status.get());
+    jpu.pic_start.write(MJPEG_PIC_START::START_PIC::SET);
     Ok(())
 }
 
@@ -446,19 +446,19 @@ fn start_decode(frame_phys: usize,
 const DECODE_TIMEOUT_MS: u64 = 200;
 
 fn poll_decode_done() -> Result<(), &'static str> {
-    let r = jpu_regs();
+    let jpu = jpu_regs();
     let t0 = rdtime();
     let timeout = Duration::from_millis(DECODE_TIMEOUT_MS);
 
     loop {
-        if r.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
-            clear_pic_status(r.pic_status.get());
+        if jpu.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
+            clear_pic_status(jpu.pic_status.get());
             return Ok(());
         }
 
-        if r.pic_status.is_set(MJPEG_PIC_STATUS::ERROR) {
-            let status = r.pic_status.get();
-            let err_mb = r.pic_errmb.get();
+        if jpu.pic_status.is_set(MJPEG_PIC_STATUS::ERROR) {
+            let status = jpu.pic_status.get();
+            let err_mb = jpu.pic_errmb.get();
             log::warn!(
                 "[JPU] Error! status=0x{:x}, err_mb=0x{:x}",
                 status,
@@ -473,7 +473,7 @@ fn poll_decode_done() -> Result<(), &'static str> {
             core::hint::spin_loop();
         }
         if elapsed_since(t0) >= timeout {
-            let status = r.pic_status.get();
+            let status = jpu.pic_status.get();
             log::warn!("[JPU] Timeout! status=0x{:x}", status);
             return Err("JPU decode timeout");
         }

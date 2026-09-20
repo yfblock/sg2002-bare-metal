@@ -84,19 +84,19 @@ impl IsochInEp {
             let tsiz = hctsiz(pid, pktcnt, xfersize);
 
             let ch = Channel::VIDEO;
-            let c = ch.regs();
+            let chan = ch.regs();
             ch.wait_disabled()?;
             ch.halt();
-            c.hcsplt.set(0);
-            c.hcint.set(HCINT_ALL_W1C);
-            c.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
-            c.hctsiz.set(tsiz);
+            chan.hcsplt.set(0);
+            chan.hcint.set(HCINT_ALL_W1C);
+            chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
+            chan.hctsiz.set(tsiz);
             let dmap = dma_phys(dma_off);
             usb_bus_fence_before_dma();
-            c.hcdma.set(dmap);
+            chan.hcdma.set(dmap);
             usb_bus_fence_before_dma();
             let oddfrm = next_uframe_oddfrm();
-            c.hcchar.set((hc_base + oddfrm + HCCHAR::CHENA::SET).value);
+            chan.hcchar.set((hc_base + oddfrm + HCCHAR::CHENA::SET).value);
 
             let st = ch.wait_halted()?;
             if st.is_set(HCINT::STALL) {
@@ -117,7 +117,7 @@ impl IsochInEp {
             if !st.is_set(HCINT::XFERCOMPL) {
                 return Ok(0);
             }
-            let rem = c.hctsiz.read(HCTSIZ::XFERSIZE);
+            let rem = chan.hctsiz.read(HCTSIZ::XFERSIZE);
             let actual = xfersize.saturating_sub(rem) as usize;
             if actual > 0 {
                 cache::dcache_invalidate_after_dma(dma_ptr().add(dma_off), actual);

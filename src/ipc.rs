@@ -78,14 +78,14 @@ fn flush_mailbox() {
 
 /// 整结构写入邮箱（启动存活标记 / panic 标记用；帧信息走 [`notify`]）。
 pub fn write(frame_count: u32, yuv_size: u32, flags: u32) {
-    let r = regs();
-    r.magic.set(MAILBOX_MAGIC);
-    r.frame_count.set(frame_count);
-    r.yuv_size.set(yuv_size);
-    r.flags.set(flags);
-    r.reply_magic.set(0);
-    r.reply_data.set(0);
-    r.reply_seq.set(0);
+    let mbox = regs();
+    mbox.magic.set(MAILBOX_MAGIC);
+    mbox.frame_count.set(frame_count);
+    mbox.yuv_size.set(yuv_size);
+    mbox.flags.set(flags);
+    mbox.reply_magic.set(0);
+    mbox.reply_data.set(0);
+    mbox.reply_seq.set(0);
     flush_mailbox();
 }
 
@@ -95,12 +95,12 @@ pub fn write(frame_count: u32, yuv_size: u32, flags: u32) {
 /// reply 字段由中断上下文的 `write_reply` 写，整结构读改写会在
 /// "读 current → 写回" 之间把 ISR 刚写的 reply 覆盖掉（13 FPS 下必然丢）。
 pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
-    let r = regs();
-    r.frame_count.set(frame_count);
-    r.yuv_size.set(yuv_size);
-    r.flags.set(flags);
+    let mbox = regs();
+    mbox.frame_count.set(frame_count);
+    mbox.yuv_size.set(yuv_size);
+    mbox.flags.set(flags);
     // magic 最后写：大核以 magic 作为"这块内容有效"的判据
-    r.magic.set(MAILBOX_MAGIC);
+    mbox.magic.set(MAILBOX_MAGIC);
 
     flush_mailbox();
 
@@ -113,12 +113,12 @@ pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
 /// 只碰 offset 16..32（大核→小核那一半），和 `notify` 写的 0..16 完全不重叠，
 /// 所以中断上下文和主循环并发写也不会互相覆盖。
 pub fn write_reply(msg: u32) {
-    let r = regs();
-    let seq = r.reply_seq.get();
-    r.reply_data.set(msg);
-    r.reply_seq.set(seq.wrapping_add(1));
+    let mbox = regs();
+    let seq = mbox.reply_seq.get();
+    mbox.reply_data.set(msg);
+    mbox.reply_seq.set(seq.wrapping_add(1));
     // magic 最后写，作为有效标志
-    r.reply_magic.set(REPLY_MAGIC);
+    mbox.reply_magic.set(REPLY_MAGIC);
     flush_mailbox();
 }
 

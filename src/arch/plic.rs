@@ -40,7 +40,7 @@ pub unsafe fn init() {
 
 /// Claim(读 claim 寄存器获取中断 source ID;0 = 无 pending)。
 pub fn claim() -> u32 {
-    plic().claim(CTX).map(|v| v.get()).unwrap_or(0)
+    plic().claim(CTX).map(|id| id.get()).unwrap_or(0)
 }
 
 /// Complete(写 source ID 完成中断处理)。

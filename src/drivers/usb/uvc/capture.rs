@@ -70,16 +70,16 @@ fn process_packet(
                 None => *last_fid = Some(cur_fid),
                 Some(prev) if prev != cur_fid => {
                     *state = FrameState::Capturing { frame_fid: cur_fid, saw_data: false };
-                    let p = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
-                    return process_packet_capturing(state, p);
+                    let pkt_state = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
+                    return process_packet_capturing(state, pkt_state);
                 }
                 _ => {}
             }
             Ok(false)
         }
         FrameState::Capturing { .. } => {
-            let p = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
-            process_packet_capturing(state, p)
+            let pkt_state = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
+            process_packet_capturing(state, pkt_state)
         }
     }
 }

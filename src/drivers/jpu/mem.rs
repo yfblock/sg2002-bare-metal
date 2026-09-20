@@ -63,8 +63,8 @@ impl JpuMemoryPool {
                 consecutive += 1;
                 if consecutive >= npages {
                     for i in 0..npages {
-                        let p = start_page + i;
-                        self.bitmap[p / 64] &= !(1 << (p % 64));
+                        let page = start_page + i;
+                        self.bitmap[page / 64] &= !(1 << (page % 64));
                     }
                     let addr = self.base_addr + start_page * VMEM_PAGE_SIZE;
                     return Some(PhysBuffer {
@@ -86,11 +86,11 @@ impl JpuMemoryPool {
         let start_page = (buf.addr - self.base_addr) / VMEM_PAGE_SIZE;
         let npages = buf.size.div_ceil(VMEM_PAGE_SIZE);
         for i in 0..npages {
-            let p = start_page + i;
-            if p >= self.num_pages {
+            let page = start_page + i;
+            if page >= self.num_pages {
                 break;
             }
-            self.bitmap[p / 64] |= 1 << (p % 64);
+            self.bitmap[page / 64] |= 1 << (page % 64);
         }
     }
 }

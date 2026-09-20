@@ -71,12 +71,12 @@ impl ScanState {
     }
 
     fn take_addr(&mut self) -> UsbResult<u8> {
-        let a = self.next_free_addr;
-        if a >= MAX_USB_ADDR {
+        let addr = self.next_free_addr;
+        if addr >= MAX_USB_ADDR {
             return Err(UsbError::Protocol("usb address space full"));
         }
         self.next_free_addr = self.next_free_addr.saturating_add(1);
-        Ok(a)
+        Ok(addr)
     }
 }
 

@@ -51,20 +51,20 @@ pub fn take_usb_isr_count() -> u32 {
 /// → PLIC source 30 → M-mode trap。本函数清 `HCINT` 并设 `CH_DONE` 唤醒等待者。
 pub fn handle_usb_irq() {
     USB_ISR_COUNT.fetch_add(1, Ordering::Relaxed);
-    let r = regs();
-    if !r.gintsts.is_set(GINTSTS::HCHINT) {
+    let dwc2 = regs();
+    if !dwc2.gintsts.is_set(GINTSTS::HCHINT) {
         return;
     }
     // HAINT：每 bit 对应一个通道的中断状态。
-    let haint = r.haint.get();
+    let haint = dwc2.haint.get();
     for ch in 0..2u32 {
         if haint & (1 << ch) == 0 {
             continue;
         }
-        let c = channel(ch);
-        let hcint = c.hcint.extract();
+        let chan = channel(ch);
+        let hcint = chan.hcint.extract();
         // 清掉本通道所有中断位（W1C）
-        c.hcint.set(hcint.get());
+        chan.hcint.set(hcint.get());
         if hcint.is_set(HCINT::CHHLTD) {
             CH_DONE[ch as usize].store(true, Ordering::Release);
         }
@@ -95,9 +95,9 @@ impl Channel {
 
     /// 等通道空闲（`CHENA` 自清）。
     pub(crate) fn wait_disabled(&self) -> UsbResult<()> {
-        let c = self.regs();
+        let chan = self.regs();
         for _ in 0..2_000_000u32 {
-            if !c.hcchar.is_set(HCCHAR::CHENA) {
+            if !chan.hcchar.is_set(HCCHAR::CHENA) {
                 return Ok(());
             }
             spin_delay(8);
@@ -107,13 +107,13 @@ impl Channel {
 
     /// 若通道仍忙，按 Linux `dwc2_hc_halt` 同时置 `CHENA|CHDIS` 请求停止。
     pub(crate) fn halt(&self) {
-        let c = self.regs();
-        if !c.hcchar.is_set(HCCHAR::CHENA) {
+        let chan = self.regs();
+        if !chan.hcchar.is_set(HCCHAR::CHENA) {
             return;
         }
-        c.hcchar.modify(HCCHAR::CHENA::SET + HCCHAR::CHDIS::SET);
+        chan.hcchar.modify(HCCHAR::CHENA::SET + HCCHAR::CHDIS::SET);
         for _ in 0..500_000u32 {
-            if !c.hcchar.is_set(HCCHAR::CHENA) {
+            if !chan.hcchar.is_set(HCCHAR::CHENA) {
                 return;
             }
             spin_delay(8);
@@ -126,19 +126,19 @@ impl Channel {
     /// 实测每 100 帧约 69 次 ISR，而同期有 7700 次通道传输，覆盖率不到 1%。
     /// 中断链路本身是正确的（`HCINTMSK` 已编程、无误触发），只是不足以替代轮询。
     pub(crate) fn wait_halted(&self) -> UsbResult<HcintSnapshot> {
-        let c = self.regs();
+        let chan = self.regs();
         let idx = self.0 as usize;
         for _ in 0..8_000_000u32 {
             // 中断路径：USB ISR 设了 CH_DONE
             if CH_DONE[idx].swap(false, Ordering::AcqRel) {
-                let hi = c.hcint.extract();
-                c.hcint.set(hi.get());
+                let hi = chan.hcint.extract();
+                chan.hcint.set(hi.get());
                 return Ok(hi);
             }
             // 轮询兜底。实测 PLIC source 30 覆盖率不足 1%，绝大多数传输走这里。
-            let hi = c.hcint.extract();
+            let hi = chan.hcint.extract();
             if hi.is_set(HCINT::CHHLTD) {
-                c.hcint.set(hi.get());
+                chan.hcint.set(hi.get());
                 return Ok(hi);
             }
             spin_delay(8);
@@ -153,7 +153,7 @@ impl Channel {
         hctsiz: u32,
         dma_off: u32,
     ) -> UsbResult<HcintSnapshot> {
-        let c = self.regs();
+        let chan = self.regs();
         let dmap = super::dma::dma_phys(dma_off as usize);
 
         // EP0 control 上：NAK = 设备未就绪，自动重试；XACTERR = CRC/PID/babble，
@@ -165,15 +165,15 @@ impl Channel {
         for attempt in 0..=NAK_RETRIES {
             self.wait_disabled()?;
             self.halt();
-            c.hcsplt.set(0);
-            c.hcint.set(HCINT_ALL_W1C);
-            c.hcintmsk
+            chan.hcsplt.set(0);
+            chan.hcint.set(HCINT_ALL_W1C);
+            chan.hcintmsk
                 .set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
-            c.hctsiz.set(hctsiz);
+            chan.hctsiz.set(hctsiz);
             usb_bus_fence_before_dma();
-            c.hcdma.set(dmap);
+            chan.hcdma.set(dmap);
             usb_bus_fence_before_dma();
-            c.hcchar.set(hc_value);
+            chan.hcchar.set(hc_value);
             let st = self.wait_halted()?;
             if st.is_set(HCINT::STALL) {
                 return Err(UsbError::Stall);
@@ -216,14 +216,14 @@ pub(crate) fn hcchar_control(
     mps: u32,
     dir_in: bool,
 ) -> FieldValue<u32, HCCHAR::Register> {
-    let mut v = HCCHAR::MPS.val(mps & 0x7ff)
+    let mut field = HCCHAR::MPS.val(mps & 0x7ff)
         + HCCHAR::EPNUM.val(ep & 0xf)
         + HCCHAR::DEVADDR.val(dev & 0x7f)
         + HCCHAR::EPTYPE::Control;
     if dir_in {
-        v = v + HCCHAR::EPDIR::SET;
+        field = field + HCCHAR::EPDIR::SET;
     }
-    v
+    field
 }
 
 pub(crate) fn hcchar_isoch(
@@ -233,15 +233,15 @@ pub(crate) fn hcchar_isoch(
     mult: u32,
     dir_in: bool,
 ) -> FieldValue<u32, HCCHAR::Register> {
-    let mut v = HCCHAR::MPS.val(mps & 0x7ff)
+    let mut field = HCCHAR::MPS.val(mps & 0x7ff)
         + HCCHAR::EPNUM.val(ep & 0xf)
         + HCCHAR::DEVADDR.val(dev & 0x7f)
         + HCCHAR::EPTYPE::Isochronous
         + HCCHAR::MC.val(mult.clamp(1, 3) & 0x3);
     if dir_in {
-        v = v + HCCHAR::EPDIR::SET;
+        field = field + HCCHAR::EPDIR::SET;
     }
-    v
+    field
 }
 
 /// 读 HFNUM 决定下个微帧奇偶；若当前帧 LSB=0（偶），下一帧为奇 -> 设 ODDFRM；反之清 0。

@@ -57,9 +57,9 @@ impl Pin {
         let dr = (self.base + 0x000) as *mut u32;
         unsafe {
             let mask = 1u32 << self.num;
-            let v = read_volatile(dr);
-            let v = if high { v | mask } else { v & !mask };
-            write_volatile(dr, v);
+            let val = read_volatile(dr);
+            let val = if high { val | mask } else { val & !mask };
+            write_volatile(dr, val);
         }
     }
 }
