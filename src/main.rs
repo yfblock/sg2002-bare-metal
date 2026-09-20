@@ -200,8 +200,7 @@ fn report_fps(st: &mut PipelineStats) {
     let per_frame = |d: core::time::Duration| (d / (frames.max(1) as u32)).as_micros() as u64;
     logger::print_fmt(format_args!(
         "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
-         us{{cap={} dec={} ive={} hb={}}} \
-         jpu{{inv1={} poll={} inv2={} cpy={} cln={}}} usbisr={} jpu_err={}\n",
+         us{{cap={} dec={} ive={} hb={}}} usbisr={} jpu_err={}\n",
         st.frames,
         fps_x100 / 100,
         fps_x100 % 100,
@@ -212,16 +211,6 @@ fn report_fps(st: &mut PipelineStats) {
         per_frame(st.ive),
         // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
         unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) },
-        per_frame(crate::drivers::jpu::trace::take_step_time(
-            crate::drivers::jpu::trace::step::INV_FRAME)),
-        per_frame(crate::drivers::jpu::trace::take_step_time(
-            crate::drivers::jpu::trace::step::POLL)),
-        per_frame(crate::drivers::jpu::trace::take_step_time(
-            crate::drivers::jpu::trace::step::INV_AFTER)),
-        per_frame(crate::drivers::jpu::trace::take_step_time(
-            crate::drivers::jpu::trace::step::COPY_STREAM)),
-        per_frame(crate::drivers::jpu::trace::take_step_time(
-            crate::drivers::jpu::trace::step::CLEAN_STREAM)),
         crate::drivers::usb::dwc2::take_usb_isr_count(),
         crate::drivers::jpu::take_reset_count(),
     ));

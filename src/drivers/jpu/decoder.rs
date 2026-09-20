@@ -64,9 +64,7 @@ impl JpuDecoder {
 
         let copy_len = jpeg_data.len().min(self.stream_buf.size);
         copy_to_phys(self.stream_buf, &jpeg_data[..copy_len]);
-        super::trace::mark_timed(super::trace::step::COPY_STREAM);
         dcache_clean_range(self.stream_buf.addr, copy_len);
-        super::trace::mark_timed(super::trace::step::CLEAN_STREAM);
 
         let (frame_size, layout) = frame_layout(&header_info)?;
 
@@ -78,7 +76,6 @@ impl JpuDecoder {
             );
             return Err("output buffer too small");
         }
-        super::trace::mark_timed(super::trace::step::INV_FRAME);
 
         configure_stream_regs(
             &self.stream_buf,
@@ -95,15 +92,12 @@ impl JpuDecoder {
 
         let frame_dma = self.frame_buf.addr; // identity(VA=PA)
         start_decode(frame_dma, &header_info, layout)?;
-
-        super::trace::mark_timed(super::trace::step::POLL);
         if let Err(e) = poll_decode_done() {
             // 挂死/出错后必须真正复位 JPEG 块（assert→deassert 脉冲），否则
             // 后续每帧都会再等满一个超时。
             super::regs::hard_reset();
             return Err(e);
         }
-        super::trace::mark_timed(super::trace::step::INV_AFTER);
 
         let result = DecodeResult {
             width: header_info.width,
