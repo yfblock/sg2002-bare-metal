@@ -50,7 +50,7 @@ pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResul
     *next_addr = addr.saturating_add(1);
     Ep0::set_address(addr, ep0_mps)?;
     dwc2::usb_post_set_address_delay();
-    let ep0 = Ep0::new(u32::from(addr), ep0_mps);
+    let ep0: Ep0 = Ep0::new(addr as u32, ep0_mps);
     ep0.set_configuration(1)?;
     let iface_class = first_interface_class(&ep0).unwrap_or(0);
     Ok(UsbDevice {

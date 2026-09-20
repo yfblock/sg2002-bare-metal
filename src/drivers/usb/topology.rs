@@ -1,12 +1,14 @@
-//! USB 总线枚举器：递归遍历 hub 树，逐设备 `SET_ADDRESS`/`SET_CONFIGURATION`，
-//! 经 [`super::device`] 类驱动注册表接管功能设备并沿返回值上抛。
+//! USB 总线树遍历：hub 为节点、端口为边——根口与 hub 端口走同一条
+//! [`Hub::enumerate_child`](super::hub::Hub::enumerate_child) 路径取出子设备,
+//! 经 [`super::device`] 类驱动注册表接管并沿返回值上抛。
 //!
-//! 三层分工：`enumerate_bus`（入口/收结果）→ `visit_default_depth`（枚举单台
-//! 设备并分派 hub/功能）→ `walk_hub_ports`（遍历 hub 端口并递归下探）。
-//! 端口操作机制在 [`super::hub`]，设备身份与驱动在 [`super::device`]。
+//! 三层分工:`enumerate_bus`(入口/根口 bring-up/收结果)→ `dispatch_device`
+//! (单台设备分派 hub/功能)→ `walk_hub_ports`(遍历 hub 端口并递归下探)。
 
-use super::device::{self, UsbDevice};
-use super::hub::{DeviceHub, PortSpeed, Hub, W0_CONNECTION, W0_ENABLE};
+use core::time::Duration;
+
+use super::device::{UsbDevice, DRIVERS};
+use super::hub::{DeviceHub, Hub, RootHub};
 use crate::drivers::usb::error::{UsbError, UsbResult};
 
 /// 拓扑日志缩进（每级 2 空格，封顶 12 级）。
@@ -27,40 +29,24 @@ macro_rules! topo_log {
     };
 }
 
-/// 在默认地址 **0** 上枚举一台设备并分派：
+/// 分派一台已枚举的设备:
 ///
-/// - **Hub** → 转 [`walk_hub_ports`] 递归下探；
-/// - **功能设备** → 类驱动注册表匹配，被接管则作为 `Some` 上抛（先到先得）。
-///
-/// `parent_hub==0 && port_on_hub==0` 表示根口直连（仅影响日志）。`next_addr`
-/// 为共享地址分配游标，递归全程穿过。
-fn visit_default_depth(
-    depth: u8,
-    parent_hub: u8,
-    port_on_hub: u8,
-    speed: PortSpeed,
-    next_addr: &mut u8,
-) -> UsbResult<Option<UsbDevice>> {
-    let dev = device::enumerate_device(speed, next_addr)?;
-
-    if parent_hub == 0 && port_on_hub == 0 {
-        topo_log!(depth, "[USB] root dev@0 VID={:04x} PID={:04x} dev_class={:02x}",
-            dev.vid, dev.pid, dev.dev_class);
-    } else {
-        topo_log!(depth, "[USB] dev@0 (hub {} port {}) VID={:04x} PID={:04x} dev_class={:02x}",
-            parent_hub, port_on_hub, dev.vid, dev.pid, dev.dev_class);
-    }
+/// - **Hub** → 转 [`walk_hub_ports`] 递归下探;
+/// - **功能设备** → 类驱动注册表匹配,被接管则 `Some` 上抛(先到先得)。
+fn dispatch_device(depth: u8, dev: UsbDevice, next_addr: &mut u8) -> UsbResult<Option<UsbDevice>> {
+    topo_log!(depth, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
+        dev.vid, dev.pid, dev.dev_class);
 
     if dev.is_hub() {
         let hub_addr = dev.ep0.dev() as u8;
-        topo_log!(depth, "[USB]   -> Hub enumerated addr={}", hub_addr);
-        return walk_hub_ports(depth, &DeviceHub::new(&dev.ep0)?, hub_addr, next_addr);
+        topo_log!(depth, "[USB]   -> Hub addr={}", hub_addr);
+        return walk_hub_ports(depth, &DeviceHub::new(&dev.ep0)?, next_addr);
     }
 
     // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
     topo_log!(depth, "[USB]   -> function addr={} first_ifc_class={:02x}",
         dev.ep0.dev(), dev.iface_class);
-    match device::DRIVERS.iter().find(|d| d.matches(&dev)) {
+    match DRIVERS.iter().find(|d| d.matches(&dev)) {
         Some(driver) => {
             topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
                 driver.name(), dev.ep0.dev());
@@ -70,13 +56,12 @@ fn visit_default_depth(
     }
 }
 
-/// 遍历一台 hub 的全部下游端口:供电 → 等稳定 → 逐口「扫连接 → 复位 → 查使能」,
-/// 对连接且使能的端口递归 [`visit_default_depth`];返回子树被接管的设备
-/// (多台先到先得)。单口失败只记日志跳过,不中断整树。
+/// 遍历一台 hub 的全部下游端口:供电 → 等稳定 → 逐口取子设备
+/// ([`Hub::enumerate_child`])并递归 [`dispatch_device`];返回子树被接管
+/// 的设备(多台先到先得)。单口失败只记日志跳过,不中断整树。
 fn walk_hub_ports(
     depth: u8,
     hub_dev: &DeviceHub,
-    hub_addr: u8,
     next_addr: &mut u8,
 ) -> UsbResult<Option<UsbDevice>> {
     let nports = hub_dev.nports();
@@ -90,59 +75,34 @@ fn walk_hub_ports(
         }
     }
     // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
-    crate::arch::time::delay(hub_dev.pwr_good() + core::time::Duration::from_millis(100));
+    crate::arch::time::delay(hub_dev.pwr_good() + Duration::from_millis(100));
 
     let mut claimed: Option<UsbDevice> = None;
     for port in 1..=nports {
-        // ③ 扫连接
-        let status = match hub_dev.port_status_w0(port) {
-            Ok(s) => s,
-            Err(e) => {
-                topo_log!(depth, "[USB]   -> port {} GET_PORT_STATUS: {:?}", port, e);
-                continue;
-            }
+        let Some(child) = hub_dev.enumerate_child(port, next_addr)? else {
+            continue;
         };
-        let conn = status & W0_CONNECTION != 0;
-        topo_log!(depth, "[USB]   -> port {} wPortStatus={:#06x} {}",
-            port, status, if conn { "CONNECTED" } else { "empty" });
-        if !conn {
-            continue;
-        }
-
-        // ④ 清连接变化 → 复位并等稳定(TDRSTR/TRSTRCY) → 清复位变化
-        if let Err(e) = hub_dev.connect_reset_sequence(port) {
-            topo_log!(depth, "[USB]   -> port {} reset sequence: {:?}", port, e);
-            continue;
-        }
-
-        // ⑤ 复位后必须 PORT_ENABLE=1,否则该口复位失败
-        let after = match hub_dev.port_status_w0(port) {
-            Ok(s) => s,
-            Err(e) => {
-                topo_log!(depth, "[USB]   -> port {} after-reset GET_PORT_STATUS: {:?}", port, e);
-                continue;
-            }
-        };
-        let enabled = after & W0_ENABLE != 0;
-        let child_speed = PortSpeed::from_status(after);
-        topo_log!(depth, "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
-            port, after, enabled, child_speed.as_str());
-        if !enabled {
-            continue;
-        }
-
-        let sub = visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, next_addr)?;
+        let sub = dispatch_device(depth.saturating_add(1), child, next_addr)?;
         claimed = claimed.or(sub); // 多台候选先到先得
     }
     Ok(claimed)
 }
 
-/// 递归枚举整条总线，返回被类驱动接管的设备；无人接管 = `Err(Protocol)`。
-pub fn enumerate_bus(root_speed: PortSpeed) -> UsbResult<UsbDevice> {
+/// 树遍历整条总线：根口等连接 → 取根口子设备 → 分派;返回被类驱动接管的
+/// 设备;根口无设备/无人接管 = `Err`。
+pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
+    if !root.wait_connect(1, Duration::from_secs(5)) {
+        return Err(UsbError::Hardware(
+            "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
+        ));
+    }
     let mut next_addr: u8 = 1;
-    let visit = visit_default_depth(0, 0, 0, root_speed, &mut next_addr);
+    let child = root
+        .enumerate_child(1, &mut next_addr)?
+        .ok_or(UsbError::Protocol("root port child not enabled"))?;
     log::info!("[USB] topology: scan finished.");
-    visit?.ok_or(UsbError::Protocol("no device claimed by any class driver"))
+    dispatch_device(0, child, &mut next_addr)?
+        .ok_or(UsbError::Protocol("no device claimed by any class driver"))
 }
