@@ -6,8 +6,8 @@ use super::regs::{
     HUFF_ADDR_MAX, HUFF_ADDR_PTR, HUFF_PHASE_MAX, HUFF_PHASE_MIN, HUFF_PHASE_PTR, HUFF_PHASE_VAL,
     MJPEG_HUFF_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START, MJPEG_PIC_STATUS,
     MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y, STREAM_BUF_SIZE, VALUE32,
-    bbc_strm_ctrl_value, clear_pic_status_at, jpu_regs_at,
-    pic_ctrl_value, wait_bbc_idle_at, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
+    bbc_strm_ctrl_value, clear_pic_status, jpu_regs,
+    pic_ctrl_value, wait_bbc_idle, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
 };
 use crate::arch::cache::{dcache_clean_range, dcache_invalidate_range};
 use core::time::Duration;
@@ -22,22 +22,10 @@ pub struct DecodeResult {
     pub yuv_data: &'static [u8],
 }
 
-/// JPU MMIO 基址（与 [`crate::drivers::gpio::GPIO::new`] 相同：由板级传入已映射地址）。
-#[derive(Clone, Copy, Debug)]
-pub struct JpuMmio {
-    pub jpu_base: usize,
-    pub top_base: usize,
-    pub vc_base: usize,
-}
-
-
-
 /// JPU 解码器实例（持有 stream/frame DMA 缓冲）。
 pub struct JpuDecoder {
-    mmio: JpuMmio,
     stream_buf: PhysBuffer,
     frame_buf: PhysBuffer,
-    initialized: bool,
     /// 调用方指定的输出缓冲（物理地址）。设了之后 `decode()` 让 JPU **直接 DMA
     /// 到这里**，不再从内部 pool 分配 frame_buf，省掉一次整帧 memcpy。
     output_buf: Option<PhysBuffer>,
@@ -51,30 +39,17 @@ impl JpuDecoder {
     /// 创建解码器，用 `hardware_init_at_no_vd_remap`（设时钟/复位/VC/软复位，但不设 VD_REMAP）。
     /// 适用于小核（C906L）：VD_REMAP 会把 32 位 DMA 地址扩展到 40 位，超出 DDR 范围。
     /// DMA pool 用外部地址（绕过静态 DMA_BUFFER 在预留区的问题）。
-    pub unsafe fn new_at_no_vd_remap_with_pool(
-        jpu_base: usize,
-        top_base: usize,
-        vc_base: usize,
-        dma_pool_base: usize,
-        dma_pool_size: usize,
-    ) -> Result<Self, &'static str> {
+    pub unsafe fn new_at_no_vd_remap_with_pool(dma_pool_base: usize, dma_pool_size: usize) -> Result<Self, &'static str> {
         let mut decoder = Self {
-            mmio: JpuMmio {
-                jpu_base,
-                top_base,
-                vc_base,
-            },
             stream_buf: PhysBuffer { addr: 0, size: 0 },
             frame_buf: PhysBuffer { addr: 0, size: 0 },
-            initialized: false,
             output_buf: None,
             cpu_reads_output: true,
         };
         super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
-        super::regs::hardware_init_at_no_vd_remap(jpu_base, top_base, vc_base);
+        super::regs::hardware_init_no_vd_remap();
         decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
             .ok_or("Failed to allocate stream buffer")?;
-        decoder.initialized = true;
         Ok(decoder)
     }
 
@@ -83,7 +58,7 @@ impl JpuDecoder {
     /// 光靠软复位（START_INIT）或重跑 `hardware_init_*` 都救不回来——后者只
     /// "释放"复位位，对已在运行的块是空操作。详见 [`regs::hard_reset_at`]。
     pub fn recover(&mut self) {
-        super::regs::hard_reset_at(self.mmio.jpu_base, self.mmio.top_base, self.mmio.vc_base);
+        super::regs::hard_reset_at();
     }
 
     /// 让 `decode()` 把 YUV 直接 DMA 到 `pa`，不再用内部 pool 的 frame_buf。
@@ -107,23 +82,16 @@ impl JpuDecoder {
     }
 
     pub fn decode(&mut self, jpeg_data: &[u8]) -> Result<DecodeResult, &'static str> {
-        use super::trace::{mark_timed as mark, step};
-        mark(step::ENTER);
-        if !self.initialized {
-            return Err("JPU not initialized");
-        }
 
         let header_info = parse_jpeg_header(jpeg_data)?;
-        mark(step::PARSE_HEADER);
 
         let copy_len = jpeg_data.len().min(self.stream_buf.size);
         copy_to_phys(self.stream_buf, &jpeg_data[..copy_len]);
-        mark(step::COPY_STREAM);
+        super::trace::mark_timed(super::trace::step::COPY_STREAM);
         dcache_clean_range(self.stream_buf.addr, copy_len);
-        mark(step::CLEAN_STREAM);
+        super::trace::mark_timed(super::trace::step::CLEAN_STREAM);
 
         let (frame_size, layout) = frame_layout(&header_info)?;
-        mark(step::FRAME_LAYOUT);
 
         match self.output_buf {
             Some(out) => {
@@ -136,64 +104,53 @@ impl JpuDecoder {
                     return Err("output buffer too small");
                 }
                 self.frame_buf = PhysBuffer { addr: out.addr, size: out.size };
-                mark(step::FREE_FRAME);
-                mark(step::ALLOC_FRAME);
             }
             None => {
                 if !self.frame_buf.is_empty() {
                     jpu_free(self.frame_buf);
                     self.frame_buf = PhysBuffer { addr: 0, size: 0 };
                 }
-                mark(step::FREE_FRAME);
                 self.frame_buf = jpu_alloc(frame_size).ok_or("Failed to alloc frame buf")?;
-                mark(step::ALLOC_FRAME);
             }
         }
         if self.cpu_reads_output {
             dcache_invalidate_range(self.frame_buf.addr, frame_size);
         }
-        mark(step::INV_FRAME);
+        super::trace::mark_timed(super::trace::step::INV_FRAME);
 
         configure_stream_regs(
-            self.mmio.jpu_base,
             &self.stream_buf,
             copy_len,
             &header_info,
             layout,
         );
-        mark(step::CFG_STREAM_REGS);
 
-        upload_huff_tables(self.mmio.jpu_base, &header_info)?;
-        mark(step::HUFF);
-        upload_quant_tables(self.mmio.jpu_base, &header_info)?;
-        mark(step::QUANT);
+        upload_huff_tables(&header_info)?;
+        upload_quant_tables(&header_info)?;
 
         let stream_dma = self.stream_buf.addr; // identity(VA=PA)
-        gram_setup(self.mmio.jpu_base, stream_dma, &header_info)?;
-        mark(step::GRAM);
+        gram_setup(stream_dma, &header_info)?;
 
         let frame_dma = self.frame_buf.addr; // identity(VA=PA)
-        start_decode(self.mmio.jpu_base, frame_dma, &header_info, layout)?;
-        mark(step::START_DECODE);
+        start_decode(frame_dma, &header_info, layout)?;
 
-        if let Err(e) = poll_decode_done(self.mmio.jpu_base) {
+        super::trace::mark_timed(super::trace::step::POLL);
+        if let Err(e) = poll_decode_done() {
             // 挂死/出错后必须真正复位 JPEG 块，否则后续每帧都会再等满一个超时。
             self.recover();
             return Err(e);
         }
-        mark(step::POLL);
 
         if self.cpu_reads_output {
             dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        super::trace::mark_timed(super::trace::step::INV_AFTER);
         }
-        mark(step::INV_AFTER);
 
         let r = DecodeResult {
             width: header_info.width,
             height: header_info.height,
             yuv_data: phys_slice(self.frame_buf.addr, frame_size),
         };
-        mark(step::DONE);
         Ok(r)
     }
 }
@@ -223,6 +180,12 @@ struct FrameLayout {
     bus_req_num: u32,
 }
 
+/// `op_info` 寄存器的 AHB 总线突发请求 beat 数——厂商驱动按格式数据密度推荐:
+/// 420(SPARSE) < 422/224(MEDIUM) < 444/400(DENSE);纯性能参数,不影响正确性。
+const BUS_REQ_NUM_SPARSE: u32 = 2;
+const BUS_REQ_NUM_MEDIUM: u32 = 3;
+const BUS_REQ_NUM_DENSE: u32 = 4;
+
 fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'static str> {
     let aligned_width = match header.format {
         FORMAT_420 | FORMAT_422 => header.width.div_ceil(16) * 16,
@@ -248,19 +211,20 @@ fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'stati
         _ => (stride_c * aligned_height / 2) as usize,
     };
 
-    let (mcu_block_num, comp_info) = match header.format {
-        FORMAT_420 => (6, (10 << 8) | (5 << 4) | 5),
-        FORMAT_422 => (4, (9 << 8) | (5 << 4) | 5),
-        FORMAT_224 => (4, (6 << 8) | (5 << 4) | 5),
-        FORMAT_444 => (3, (5 << 8) | (5 << 4) | 5),
-        FORMAT_400 => (1, 5 << 8),
-        _ => (6, (10 << 8) | (5 << 4) | 5),
-    };
+    // comp_info:每分量采样因子编为 (h<<2)|v,nibble 位序 [11:8]=Y [7:4]=Cb [3:0]=Cr;
+    // mcu_block_num:每 MCU 的 8×8 块数 = Σ hᵢ·vᵢ。
+    // 两者均由 SOF 采样因子直接推导,与厂商驱动真值表逐字节一致,不再按格式查表。
+    let mut comp_info = 0u32;
+    let mut mcu_block_num = 0u32;
+    for (i, &(h, v)) in header.sampling.iter().enumerate().take(header.num_components as usize) {
+        comp_info |= (u32::from(h) << 2 | u32::from(v)) << (8 - 4 * i);
+        mcu_block_num += u32::from(h) * u32::from(v);
+    }
     let bus_req_num = match header.format {
-        FORMAT_420 => 2,
-        FORMAT_422 | FORMAT_224 => 3,
-        FORMAT_444 | FORMAT_400 => 4,
-        _ => 2,
+        FORMAT_420 => BUS_REQ_NUM_SPARSE,
+        FORMAT_422 | FORMAT_224 => BUS_REQ_NUM_MEDIUM,
+        FORMAT_444 | FORMAT_400 => BUS_REQ_NUM_DENSE,
+        _ => BUS_REQ_NUM_SPARSE,
     };
 
     Ok((
@@ -279,14 +243,12 @@ fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'stati
     ))
 }
 
-fn configure_stream_regs(
-    jpu_base: usize,
-    stream_buf: &PhysBuffer,
+fn configure_stream_regs(stream_buf: &PhysBuffer,
     copy_len: usize,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
 ) {
-    let r = jpu_regs_at(jpu_base);
+    let r = jpu_regs();
     let stream_phys = stream_buf.addr as u32; // identity(VA=PA)
     let stream_end = (stream_buf.addr + copy_len) as u32;
 
@@ -322,8 +284,8 @@ fn configure_stream_regs(
     r.op_info.write(VALUE32::VAL.val(layout.bus_req_num));
 }
 
-fn upload_huff_tables(jpu_base: usize, header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs_at(jpu_base);
+fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
+    let r = jpu_regs();
 
     r.huff_ctrl
         .write(MJPEG_HUFF_CTRL::PHASE.val(HUFF_PHASE_MIN));
@@ -382,8 +344,8 @@ fn upload_huff_tables(jpu_base: usize, header: &JpegHeaderInfo) -> Result<(), &'
     Ok(())
 }
 
-fn upload_quant_tables(jpu_base: usize, header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs_at(jpu_base);
+fn upload_quant_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
+    let r = jpu_regs();
     let qmat_phases = [QMAT_PHASE_Y, QMAT_PHASE_CB, QMAT_PHASE_CR];
     let comp_count = (header.num_components as usize).min(3);
     for (comp_idx, &phase) in qmat_phases.iter().enumerate().take(comp_count) {
@@ -401,8 +363,8 @@ fn upload_quant_tables(jpu_base: usize, header: &JpegHeaderInfo) -> Result<(), &
     Ok(())
 }
 
-fn gram_setup(jpu_base: usize, stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'static str> {
-    let r = jpu_regs_at(jpu_base);
+fn gram_setup(stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'static str> {
+    let r = jpu_regs();
     let ecs_offset = header.ecs_offset;
     let page_ptr = ecs_offset >> 8;
     let mut word_ptr = (ecs_offset & 0xF0) >> 2;
@@ -422,7 +384,7 @@ fn gram_setup(jpu_base: usize, stream_phys: usize, header: &JpegHeaderInfo) -> R
         r.bbc_int_addr.write(VALUE32::VAL.val(((cur_page & 1) as u32) << 6));
         r.bbc_data_cnt.write(VALUE32::VAL.val(256 / 4));
         r.bbc_command.write(VALUE32::VAL.val(0));
-        wait_bbc_idle_at(jpu_base);
+        wait_bbc_idle();
     }
 
     r.bbc_cur_pos.write(VALUE32::VAL.val((page_ptr + 2) as u32));
@@ -445,13 +407,11 @@ fn gram_setup(jpu_base: usize, stream_phys: usize, header: &JpegHeaderInfo) -> R
     Ok(())
 }
 
-fn start_decode(
-    jpu_base: usize,
-    frame_phys: usize,
+fn start_decode(frame_phys: usize,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
 ) -> Result<(), &'static str> {
-    let r = jpu_regs_at(jpu_base);
+    let r = jpu_regs();
     r.rst_index.write(VALUE32::VAL.val(0));
     r.rst_count.write(VALUE32::VAL.val(0));
     r.dpcm_diff_y.write(VALUE32::VAL.val(0));
@@ -472,7 +432,7 @@ fn start_decode(
     r.dpb_cstride.write(VALUE32::VAL.val(layout.stride_c));
     r.clp_info.write(VALUE32::VAL.val(0));
 
-    clear_pic_status_at(jpu_base, r.pic_status.get());
+    clear_pic_status(r.pic_status.get());
     r.pic_start.write(MJPEG_PIC_START::START_PIC::SET);
     Ok(())
 }
@@ -484,18 +444,15 @@ fn start_decode(
 /// 要 **230 秒**才超时。JPU 一挂，小核就被这个循环堵 230 秒，`frame_count` 冻结，
 /// 外部看起来像彻底死机——而不是预期的"2 秒后超时并复位"。
 const DECODE_TIMEOUT_MS: u64 = 200;
-/// 次数兜底：仅在没有 `rdtime`（非 riscv64）时生效。
-const MAX_POLLS: u32 = 500_000;
 
-fn poll_decode_done(jpu_base: usize) -> Result<(), &'static str> {
-    let mut count = 0u32;
-    let r = jpu_regs_at(jpu_base);
+fn poll_decode_done() -> Result<(), &'static str> {
+    let r = jpu_regs();
     let t0 = rdtime();
     let timeout = Duration::from_millis(DECODE_TIMEOUT_MS);
 
     loop {
         if r.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
-            clear_pic_status_at(jpu_base, r.pic_status.get());
+            clear_pic_status(r.pic_status.get());
             return Ok(());
         }
 
@@ -507,7 +464,7 @@ fn poll_decode_done(jpu_base: usize) -> Result<(), &'static str> {
                 status,
                 err_mb
             );
-            clear_pic_status_at(jpu_base, status);
+            clear_pic_status(status);
             return Err("JPU decode error");
         }
 
@@ -515,11 +472,9 @@ fn poll_decode_done(jpu_base: usize) -> Result<(), &'static str> {
         for _ in 0..64 {
             core::hint::spin_loop();
         }
-        count += 1;
-
-        if elapsed_since(t0) >= timeout || count >= MAX_POLLS {
+        if elapsed_since(t0) >= timeout {
             let status = r.pic_status.get();
-            log::warn!("[JPU] Timeout! status=0x{:x}, polls={}", status, count);
+            log::warn!("[JPU] Timeout! status=0x{:x}", status);
             return Err("JPU decode timeout");
         }
     }
