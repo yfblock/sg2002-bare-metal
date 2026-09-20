@@ -1,25 +1,10 @@
 //! USB 总线拓扑：检测 **Hub**（含 QEMU 插入的虚拟 `usb-hub`）、读 Hub 描述符与端口状态，**递归**枚举下游设备并打印。
+//! 返回 [`super::device::UsbDevice`]（UVC 驱动接管的摄像头;未找到 = Err）。
 //!
-//! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_camera()` 调用；
-//! 返回 [`UvcEnumerated`]（扫描到的 UVC 摄像头；未找到 = Err）。MSC 候选扫描已随 Bulk/MSC 路径移除，
-//! 需要时见 sg200x-bsp 的 `topology.rs`。
+//! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_camera()` 调用。
 
 use super::hub::Hub;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::dwc2;
-use crate::drivers::usb::setup;
-/// USB `bDeviceClass`：Hub。
-const USB_CLASS_HUB: u8 = 0x09;
-/// QEMU 默认 `usb-hub`（插在根口与首个外设之间）VID/PID。
-const QEMU_USB_HUB_VID: u16 = 0x0409;
-const QEMU_USB_HUB_PID: u16 = 0x55aa;
-
-const MAX_USB_ADDR: u8 = 127;
-#[derive(Clone, Copy, Debug)]
-pub struct UvcEnumerated {
-    pub addr: u8,
-    pub ep0_mps: u32,
-}
 
 /// 拓扑日志缩进（每级 2 空格）。
 #[inline]
@@ -52,50 +37,7 @@ macro_rules! topo_log {
     };
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ScanState {
-    next_free_addr: u8,
-    /// 枚举到的首个 Video(0x0e) 类功能设备（多为 UVC 摄像头）。
-    uvc: Option<UvcEnumerated>,
-}
-
-impl ScanState {
-    const fn new() -> Self {
-        Self {
-            next_free_addr: 1,
-            uvc: None,
-        }
-    }
-
-    fn take_addr(&mut self) -> UsbResult<u8> {
-        let addr = self.next_free_addr;
-        if addr >= MAX_USB_ADDR {
-            return Err(UsbError::Protocol("usb address space full"));
-        }
-        self.next_free_addr = self.next_free_addr.saturating_add(1);
-        Ok(addr)
-    }
-}
-
 /// 读配置描述符前 64 字节，返回首个 **INTERFACE** 描述符的 `bInterfaceClass`（无则 0）。
-fn first_interface_class(ep: &dwc2::Ep0) -> UsbResult<u8> {
-    let mut buf = [0u8; 64];
-    ep.read(setup::get_descriptor_configuration(0, 64), &mut buf)?;
-    let mut i: usize = 0;
-    while i + 2 <= buf.len() {
-        let bl = buf[i] as usize;
-        if bl < 2 {
-            break;
-        }
-        let ty = buf[i + 1];
-        if ty == setup::USB_DT_INTERFACE && i + 6 <= buf.len() {
-            return Ok(buf[i + 5]);
-        }
-        i = i.saturating_add(bl);
-    }
-    Ok(0)
-}
-
 /// 在默认地址 **0** 上枚举一台设备：`SET_ADDRESS` → `SET_CONFIGURATION` → 打印信息。
 ///
 /// - 若为 **Hub**：分配地址、读 Hub 描述符、给各端口上电、`PORT_RESET` 后递归
@@ -107,17 +49,18 @@ fn visit_default_depth(
     depth: u8,
     parent_hub: u8,
     port_on_hub: u8,
-    st: &mut ScanState,
+    speed: super::hub::PortSpeed,
+    st: &mut super::device::ScanState,
 ) -> UsbResult<()> {
-    let (vid, pid, ep0_mps, dev_class) = dwc2::Ep0::probe_default_addr()?;
+    let dev = super::device::enumerate_device(speed, st)?;
 
     if parent_hub == 0 && port_on_hub == 0 {
         topo_log!(
             depth,
             "[USB] root dev@0 VID={:04x} PID={:04x} dev_class={:02x}",
-            vid,
-            pid,
-            dev_class
+            dev.vid,
+            dev.pid,
+            dev.dev_class
         );
     } else {
         topo_log!(
@@ -125,23 +68,17 @@ fn visit_default_depth(
             "[USB] dev@0 (hub {} port {}) VID={:04x} PID={:04x} dev_class={:02x}",
             parent_hub,
             port_on_hub,
-            vid,
-            pid,
-            dev_class
+            dev.vid,
+            dev.pid,
+            dev.dev_class
         );
     }
 
-    if dev_class == USB_CLASS_HUB || (vid == QEMU_USB_HUB_VID && pid == QEMU_USB_HUB_PID) {
-        let hub_addr = st.take_addr()?;
-        dwc2::Ep0::set_address(hub_addr, ep0_mps)?;
-        dwc2::usb_post_set_address_delay();
-        let hub = dwc2::Ep0::new(u32::from(hub_addr), ep0_mps);
-        hub.set_configuration(1)?;
+    if dev.is_hub() {
+        let hub_addr = dev.ep0.dev() as u8;
+        topo_log!(depth, "[USB]   -> Hub enumerated addr={}", hub_addr);
 
-        topo_log!(depth, "[USB]   -> Hub enumerated addr={} ep0_mps={}",
-            hub_addr, ep0_mps);
-
-        let hub_dev = super::hub::DeviceHub::new(&hub)?;
+        let hub_dev = super::hub::DeviceHub::new(&dev.ep0)?;
         let nports = hub_dev.nports();
         let pwr_good_ms = hub_dev.pwr_good_ms().max(20); // 给 ≥20ms 富余
         topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
@@ -217,34 +154,26 @@ fn visit_default_depth(
             // ⑤ 速度仅记日志（实际运行摄像头为 FS；本驱动走 FS 单向轮询、
             //    无 split transaction 需求）。
 
-            visit_default_depth(depth.saturating_add(1), hub_addr, port, st)?;
+            let child_speed = super::hub::PortSpeed::from_status(after);
+            visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, st)?;
         }
         return Ok(());
     }
 
-    // 普通功能设备
-    let fn_addr = st.take_addr()?;
-    dwc2::Ep0::set_address(fn_addr, ep0_mps)?;
-    dwc2::usb_post_set_address_delay();
-    let fun = dwc2::Ep0::new(u32::from(fn_addr), ep0_mps);
-    fun.set_configuration(1)?;
-
-    let iface_class = first_interface_class(&fun).unwrap_or(0);
+    // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者接管)。
     topo_log!(
         depth,
-        "[USB]   -> function addr={} ep0_mps={} first_ifc_class={:02x}",
-        fn_addr,
-        ep0_mps,
-        iface_class
+        "[USB]   -> function addr={} first_ifc_class={:02x}",
+        dev.ep0.dev(),
+        dev.iface_class
     );
-
-    if iface_class == setup::USB_CLASS_VIDEO && st.uvc.is_none() {
-        st.uvc = Some(UvcEnumerated {
-            addr: fn_addr,
-            ep0_mps,
-        });
-        topo_log!(depth, "[USB]   -> Video class device (UVC candidate) addr={}",
-            fn_addr);
+    for driver in super::device::DRIVERS {
+        if driver.matches(&dev) {
+            topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
+                driver.name(), dev.ep0.dev());
+            driver.probe(&dev, st)?;
+            break;
+        }
     }
 
     Ok(())
@@ -254,11 +183,11 @@ fn visit_default_depth(
 ///
 /// # 返回值
 /// 扫描到的 UVC 摄像头；拓扑中无 Video 类设备时返回 `Err(Protocol)`。
-pub fn enumerate_bus() -> UsbResult<UvcEnumerated> {
+pub fn enumerate_bus(root_speed: super::hub::PortSpeed) -> UsbResult<super::device::UsbDevice> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
-    let mut st = ScanState::new();
-    let visit = visit_default_depth(0, 0, 0, &mut st);
+    let mut st = super::device::ScanState::new();
+    let visit = visit_default_depth(0, 0, 0, root_speed, &mut st);
     log::info!("[USB] topology: scan finished.");
     visit?;
     match st.uvc {

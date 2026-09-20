@@ -109,6 +109,8 @@ register_bitfields![u32,
         OVRCURCHG OFFSET(5) NUMBITS(1) [],
         RST OFFSET(8) NUMBITS(1) [],
         PWR OFFSET(12) NUMBITS(1) [],
+        /// 端口速度(Synopsys 编码:00=HS,01=FS,10=LS——与 hub wPortStatus 相反!)。
+        SPD OFFSET(17) NUMBITS(2) [],
     ],
     /// 主机帧编号（HFNUM）。
     pub HFNUM [

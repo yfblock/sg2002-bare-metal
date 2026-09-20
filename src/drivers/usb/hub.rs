@@ -67,6 +67,14 @@ impl Hub for RootHub {
         if p.is_set(HPRT0::RST) {
             w0 |= W0_RESET;
         }
+        // SPD[18:17](Synopsys:00=HS,01=FS,10=LS)→ wPortStatus[10:9](00=FS,01=LS,10=HS):
+        // 两种编码顺序相反,须重映射而非平移。
+        let spd = (p.read(HPRT0::SPD) as u16) & 3;
+        w0 |= match spd {
+            0 => 2, // HS
+            1 => 0, // FS
+            _ => 1, // LS
+        } << 9;
         Ok(w0)
     }
 
@@ -164,6 +172,7 @@ impl Hub for DeviceHub<'_> {
 
 /// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`，§11.24.2.1）：
 /// 00=full-speed, 01=low-speed, 10=high-speed。
+#[derive(Clone, Copy)]
 pub enum PortSpeed {
     Hs,
     Fs,

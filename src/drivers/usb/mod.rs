@@ -30,6 +30,7 @@ pub mod error;
 pub mod hub;
 pub mod setup;
 
+pub mod device;
 pub mod dwc2;
 pub mod enumerate;
 pub mod topology;

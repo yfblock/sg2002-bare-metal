@@ -5,12 +5,13 @@ use core::time::Duration;
 
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::hub::{self, RootHub};
-use crate::drivers::usb::topology::{self, UvcEnumerated};
+use crate::drivers::usb::hub::{self, Hub, PortSpeed, RootHub};
+use crate::drivers::usb::topology;
+use crate::drivers::usb::device::UsbDevice;
 
 /// 初始化主机并枚举摄像头：经 hub **递归遍历整条总线**，对每台设备做
 /// `SET_ADDRESS`/`SET_CONFIGURATION`，返回扫描到的 UVC 摄像头。
-pub fn enumerate_camera() -> UsbResult<UvcEnumerated> {
+pub fn enumerate_camera() -> UsbResult<UsbDevice> {
     dwc2::dwc2_host_init()?;
     let root = RootHub;
     if !hub::wait_connect(&root, 1, Duration::from_secs(5)) {
@@ -19,5 +20,6 @@ pub fn enumerate_camera() -> UsbResult<UvcEnumerated> {
         ));
     }
     hub::connect_reset_sequence(&root, 1)?;
-    topology::enumerate_bus()
+    let speed = PortSpeed::from_status(root.port_status_w0(1)?);
+    topology::enumerate_bus(speed)
 }

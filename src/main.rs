@@ -58,7 +58,11 @@ pub(crate) extern "C" fn rust_main() -> ! {
 
     // UVC 初始化(同步,一次性)
     let cam = enumerate_camera().expect("enum");
-    let ep0 = Ep0::new(u32::from(cam.addr), cam.ep0_mps);
+    logger::print_fmt(format_args!(
+        "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
+        cam.vid, cam.pid, cam.ep0.dev(), cam.speed.as_str()
+    ));
+    let ep0 = cam.ep0;
 
     let cfg_buf = uvc::read_configuration_descriptor(&ep0, 1).expect("read cfg");
     let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
