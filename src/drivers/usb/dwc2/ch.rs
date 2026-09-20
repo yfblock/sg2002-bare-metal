@@ -61,6 +61,18 @@ pub fn handle_usb_irq() {
     }
 }
 
+/// 有界条件轮询:cond 命中返回 true,轮次耗尽返回 false(错误由调用方定)。
+/// 替代散落各处的 `for _ in 0..N { if cond {..} spin }` 手写循环。
+pub(crate) fn poll_until(iters: u32, spin: u32, mut cond: impl FnMut() -> bool) -> bool {
+    for _ in 0..iters {
+        if cond() {
+            return true;
+        }
+        spin_delay(spin);
+    }
+    false
+}
+
 pub(crate) fn spin_delay(n: u32) {
     for _ in 0..n {
         core::hint::spin_loop();
@@ -86,13 +98,11 @@ impl Channel {
     /// 等通道空闲（`CHENA` 自清）。
     pub(crate) fn wait_disabled(&self) -> UsbResult<()> {
         let chan = self.chan_regs();
-        for _ in 0..2_000_000u32 {
-            if !chan.hcchar.is_set(HCCHAR::CHENA) {
-                return Ok(());
-            }
-            spin_delay(8);
+        if poll_until(2_000_000, 8, || !chan.hcchar.is_set(HCCHAR::CHENA)) {
+            Ok(())
+        } else {
+            Err(UsbError::Timeout)
         }
-        Err(UsbError::Timeout)
     }
 
     /// 等通道 halt。中断 flag 优先，`spin_delay` 轮询兜底。
@@ -117,6 +127,26 @@ impl Channel {
         Err(UsbError::Timeout)
     }
 
+    /// 装填并启动一次通道传输:停通道 → 清协议裂片与中断 → 写传输尺寸 →
+    /// DMA 地址(fence 前后)→ 写 HCENA 启动。`hctsiz` 为原始值,
+    /// `hcchar_ena` 须已含 `CHENA`(等时通道再加 `ODDFRM`)。
+    /// 返回 DMA 物理地址(供错误日志)。MMIO 写序勿调整。
+    pub(crate) fn arm(&self, hctsiz: u32, hcchar_ena: u32, dma_off: u32) -> UsbResult<u32> {
+        let chan = self.chan_regs();
+        let dmap = super::dma::dma_phys(dma_off as usize);
+        self.wait_disabled()?;
+        // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
+        chan.hcsplt.set(0);
+        chan.hcint.set(HCINT_ALL_W1C);
+        chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
+        chan.hctsiz.set(hctsiz);
+        usb_bus_fence_before_dma();
+        chan.hcdma.set(dmap);
+        usb_bus_fence_before_dma();
+        chan.hcchar.set(hcchar_ena);
+        Ok(dmap)
+    }
+
     /// EP0 上对 NAK / XACTERR 做有限次重试；STALL 立即返回。
     pub(crate) unsafe fn xfer(
         &self,
@@ -124,9 +154,6 @@ impl Channel {
         hctsiz: u32,
         dma_off: u32,
     ) -> UsbResult<HcintSnapshot> {
-        let chan = self.chan_regs();
-        let dmap = super::dma::dma_phys(dma_off as usize);
-
         // EP0 control 上：NAK = 设备未就绪，自动重试；XACTERR = CRC/PID/babble，
         // 在 reset 解除后总线还可能不稳定，也允许少量重试。STALL 立即返回。
         const NAK_RETRIES: u32 = 64;
@@ -134,17 +161,7 @@ impl Channel {
         let mut xact_left = XACT_RETRIES;
         let hc_value = (hcchar + HCCHAR::CHENA::SET).value;
         for attempt in 0..=NAK_RETRIES {
-            self.wait_disabled()?;
-            // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
-            chan.hcsplt.set(0);
-            chan.hcint.set(HCINT_ALL_W1C);
-            chan.hcintmsk
-                .set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
-            chan.hctsiz.set(hctsiz);
-            usb_bus_fence_before_dma();
-            chan.hcdma.set(dmap);
-            usb_bus_fence_before_dma();
-            chan.hcchar.set(hc_value);
+            let dmap = self.arm(hctsiz, hc_value, dma_off)?;
             let st = self.wait_halted()?;
             if st.is_set(HCINT::STALL) {
                 return Err(UsbError::Stall);
@@ -181,39 +198,6 @@ impl Channel {
     }
 }
 
-pub(crate) fn hcchar_control(
-    dev: u32,
-    ep: u32,
-    mps: u32,
-    dir_in: bool,
-) -> FieldValue<u32, HCCHAR::Register> {
-    let mut field = HCCHAR::MPS.val(mps)
-        + HCCHAR::EPNUM.val(ep)
-        + HCCHAR::DEVADDR.val(dev)
-        + HCCHAR::EPTYPE::Control;
-    if dir_in {
-        field = field + HCCHAR::EPDIR::SET;
-    }
-    field
-}
-
-pub(crate) fn hcchar_isoch(
-    dev: u32,
-    ep: u32,
-    mps: u32,
-    mult: u32,
-    dir_in: bool,
-) -> FieldValue<u32, HCCHAR::Register> {
-    let mut field = HCCHAR::MPS.val(mps)
-        + HCCHAR::EPNUM.val(ep)
-        + HCCHAR::DEVADDR.val(dev)
-        + HCCHAR::EPTYPE::Isochronous
-        + HCCHAR::MC.val(mult.clamp(1, 3));
-    if dir_in {
-        field = field + HCCHAR::EPDIR::SET;
-    }
-    field
-}
 
 /// 读 HFNUM 决定下个微帧奇偶；若当前帧 LSB=0（偶），下一帧为奇 -> 设 ODDFRM；反之清 0。
 #[inline]

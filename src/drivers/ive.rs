@@ -182,7 +182,7 @@ pub fn set_input_fmt(fmt: u32) {
     FMT_SEL_OVERRIDE.store(fmt, Ordering::Relaxed);
 }
 
-/// 读当前生效的 `fmt_sel`（模块内供 `csc_yuv420_to_rgb888` 使用）。
+/// 读当前生效的 `fmt_sel`（模块内供 `csc` 使用）。
 fn input_fmt() -> u32 {
     match FMT_SEL_OVERRIDE.load(Ordering::Relaxed) {
         u32::MAX => ImgInCtrl::FMT_SEL::YUV420P.value,
@@ -204,13 +204,15 @@ fn write_base(lo: &ReadWrite<u32>, hi: &ReadWrite<u32>, pa: u64) {
 /// - `r_pa`, `g_pa`, `b_pa`: 输出 RGB888 planar 的 R/G/B 物理地址
 /// - `r_pitch`: 输出 RGB 的 stride（字节，RGB planar 的 G/B pitch 相同）
 /// - `width`, `height`: 图像尺寸
-pub fn csc_yuv420_to_rgb888(
-    y_pa: usize, u_pa: usize, v_pa: usize,
-    y_pitch: u32, c_pitch: u32,
-    r_pa: usize, g_pa: usize, b_pa: usize,
-    r_pitch: u32,
-    width: u32, height: u32,
+pub fn csc(
+    src: &crate::yuv_buf::YuvPlanes,
+    dst: &crate::yuv_buf::RgbPlanes,
+    width: u32,
+    height: u32,
 ) -> Result<(), &'static str> {
+    let (y_pa, u_pa, v_pa) = (src.y, src.u, src.v);
+    let (r_pa, g_pa, b_pa) = (dst.r, dst.g, dst.b);
+    let (y_pitch, c_pitch, r_pitch) = (src.stride_y as u32, src.stride_c as u32, dst.stride as u32);
     let reg = ive_regs();
     let wm1 = width.saturating_sub(1);
     let hm1 = height.saturating_sub(1);

@@ -4,6 +4,8 @@
 //! 和小核 C906L(25MHz) 读同一个 mtime，跨核时间戳可直接比较。
 //! 唯一的延时入口是 [`delay`]（接受 [`core::time::Duration`]），精确计时与 CPU 频率无关。
 
+use crate::platform::{HEARTBEAT_PA, LAST_PC_PA};
+
 use core::time::Duration;
 
 /// `rdtime`（mtime）计数频率。SG2002 为 25 MHz——实测 25.005 MHz
@@ -60,8 +62,6 @@ const CLINT_MTIMECMP_LO: usize = 0x7400_4000;
 const CLINT_MTIMECMP_HI: usize = 0x7400_4004;
 /// 心跳周期：10ms。
 const HEARTBEAT_INTERVAL_TICKS: u64 = TIMEBASE_HZ / 100;
-const HEARTBEAT_PA: usize = 0x0190_041C;
-const LAST_PC_PA: usize = 0x0190_040C;
 
 /// 启动心跳（`trap::init_interrupts` 尾部调用：先装 cmp 再开 MTIE，避免风暴）。
 pub fn init_heartbeat() {

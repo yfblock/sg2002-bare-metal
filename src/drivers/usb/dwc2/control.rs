@@ -1,9 +1,10 @@
 //! EP0 控制传输：`Ep0` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
-use super::ch::{hcchar_control, hctsiz, Channel};
+use super::ch::{hctsiz, Channel};
 use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
-use super::regs::HCTSIZ;
+use super::regs::{HCCHAR, HCTSIZ};
+use tock_registers::fields::FieldValue;
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::setup;
@@ -33,23 +34,57 @@ impl Ep0 {
         self.dev
     }
 
+    /// 本端点的 HCCHAR(EP 恒 0;方向由 dir_in 定)。
+    fn hcchar(&self, dir_in: bool) -> FieldValue<u32, HCCHAR::Register> {
+        let mut field = HCCHAR::MPS.val(self.mps)
+            + HCCHAR::EPNUM.val(0)
+            + HCCHAR::DEVADDR.val(self.dev)
+            + HCCHAR::EPTYPE::Control;
+        if dir_in {
+            field = field + HCCHAR::EPDIR::SET;
+        }
+        field
+    }
+
+    /// SETUP 阶段:8 字节请求拷入 EP0 DMA 窗,clean 后发出。
+    fn setup_stage(&self, setup_pkt: &[u8; 8]) -> UsbResult<()> {
+        unsafe {
+            core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
+            cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
+            Channel::CONTROL.xfer(
+                self.hcchar(false),
+                hctsiz(HCTSIZ::PID::Setup, 1, 8),
+                OFF_EP0 as u32,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// STATUS 零长阶段;`dir_in` 与数据阶段方向相反。
+    fn status_stage(&self, dir_in: bool) -> UsbResult<()> {
+        unsafe {
+            Channel::CONTROL.xfer(
+                self.hcchar(dir_in),
+                hctsiz(HCTSIZ::PID::Data1, 1, 0),
+                OFF_EP0 as u32,
+            )?;
+        }
+        Ok(())
+    }
+
     /// 枚举首步：在默认地址 **0** 上读 `GET_DESCRIPTOR(DEVICE, 18)`。
     ///
     /// # 返回值
     /// `(vid, pid, ep0_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
+        // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
+        let ep0 = Ep0 { dev: 0, mps: 64 };
         unsafe {
             let wlen: u16 = 18;
-            let setup_pkt = setup::get_descriptor_device();
-            core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-            cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
+            ep0.setup_stage(&setup::get_descriptor_device())?;
 
-            let mut hc = hcchar_control(0, 0, 64, false);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
-
-            hc = hcchar_control(0, 0, 64, true);
             Channel::CONTROL.xfer(
-                hc,
+                ep0.hcchar(true),
                 hctsiz(HCTSIZ::PID::Data1, 1, wlen as u32),
                 OFF_EP0 as u32,
             )?;
@@ -64,8 +99,7 @@ impl Ep0 {
             let ep0_mps = normalize_ep0_mps(sl[7]);
             let b_device_class = sl[4];
 
-            hc = hcchar_control(0, 0, 64, false);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
+            ep0.status_stage(false)?;
 
             Ok((vid, pid, ep0_mps, b_device_class))
         }
@@ -77,7 +111,7 @@ impl Ep0 {
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
-        write_no_data_raw(0, setup::set_address(addr), ep0_mps)
+        Ep0 { dev: 0, mps: ep0_mps }.write_no_data(setup::set_address(addr))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
@@ -104,7 +138,8 @@ impl Ep0 {
 
     /// 无数据阶段控制传输：`SETUP` + `STATUS` IN（零长度）。
     pub fn write_no_data(&self, setup_pkt: [u8; 8]) -> UsbResult<()> {
-        write_no_data_raw(self.dev, setup_pkt, self.mps)
+        self.setup_stage(&setup_pkt)?;
+        self.status_stage(true)
     }
 
     /// 控制读：SETUP + 若干 IN 数据包（DATA1/DATA0 交替）+ STATUS OUT。
@@ -119,20 +154,14 @@ impl Ep0 {
             return Err(UsbError::Protocol("bad ep0 read len"));
         }
         let total = out.len() as u32;
-        let (dev, mps) = (self.dev, self.mps);
+        self.setup_stage(&setup_pkt)?;
         unsafe {
-            core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-            cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
-
-            let mut hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
-
             let mut left = total;
             let mut out_off: usize = 0;
             let mut data1 = true;
             while left > 0 {
-                let chunk = left.min(mps);
-                hc = hcchar_control(dev, 0, mps, true);
+                let chunk = left.min(self.mps);
+                let hc = self.hcchar(true);
                 let pid = if data1 {
                     HCTSIZ::PID::Data1
                 } else {
@@ -150,9 +179,7 @@ impl Ep0 {
                 data1 = !data1;
             }
 
-            hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
-            Ok(())
+            self.status_stage(false)
         }
     }
 
@@ -165,26 +192,20 @@ impl Ep0 {
         if data.len() > 4096 {
             return Err(UsbError::Protocol("bad ep0 write data len"));
         }
-        let (dev, mps) = (self.dev, self.mps);
+        self.setup_stage(&setup_pkt)?;
         unsafe {
-            core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-            cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
-
-            let mut hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
-
             let mut left = data.len() as u32;
             let mut src: usize = 0;
             let mut data1 = true;
             while left > 0 {
-                let chunk = left.min(mps);
+                let chunk = left.min(self.mps);
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr().add(src),
                     dma_ptr().add(DMA_OFF_SMALL_IO),
                     chunk as usize,
                 );
                 cache::dcache_clean_for_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
-                hc = hcchar_control(dev, 0, mps, false);
+                let hc = self.hcchar(false);
                 let pid = if data1 {
                     HCTSIZ::PID::Data1
                 } else {
@@ -196,9 +217,7 @@ impl Ep0 {
                 data1 = !data1;
             }
 
-            hc = hcchar_control(dev, 0, mps, true);
-            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
-            Ok(())
+            self.status_stage(true)
         }
     }
 }
@@ -211,17 +230,3 @@ fn normalize_ep0_mps(b: u8) -> u32 {
     }
 }
 
-/// 无数据阶段控制传输的内部实现（供 `Ep0::set_address` 的地址 0 特例使用）。
-fn write_no_data_raw(dev: u32, setup_pkt: [u8; 8], mps: u32) -> UsbResult<()> {
-    unsafe {
-        core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-        cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
-
-        let hc = hcchar_control(dev, 0, mps, false);
-        Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
-
-        let hc = hcchar_control(dev, 0, mps, true);
-        Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
-        Ok(())
-    }
-}

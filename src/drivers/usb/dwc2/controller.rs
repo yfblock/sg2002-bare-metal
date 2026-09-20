@@ -15,7 +15,7 @@ use core::time::Duration;
 
 use crate::arch::time::delay;
 use crate::drivers::usb;
-use super::ch::spin_delay;
+use super::ch::{poll_until, spin_delay};
 use tock_registers::registers::ReadWrite;
 use super::regs::{
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
@@ -48,11 +48,8 @@ const DWC2_CORE_REV_MASK: u32 = 0xffff;
 
 fn wait_ahb_idle() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
-    for _ in 0..3_000_000u32 {
-        if dwc2.grstctl.is_set(GRSTCTL::AHBIDLE) {
-            return Ok(());
-        }
-        spin_delay(32);
+    if poll_until(3_000_000, 32, || dwc2.grstctl.is_set(GRSTCTL::AHBIDLE)) {
+        return Ok(());
     }
     dbg_dwc2_init_timeout("wait_ahb_idle");
     Err(UsbError::Timeout)
@@ -67,29 +64,18 @@ fn core_soft_reset() -> UsbResult<()> {
 
     dwc2.grstctl.modify(GRSTCTL::CSFTRST::SET);
 
-    if !new_rst_seq {
-        for _ in 0..3_000_000u32 {
-            if !dwc2.grstctl.is_set(GRSTCTL::CSFTRST) {
-                spin_delay(4096);
-                return Ok(());
-            }
-            spin_delay(32);
-        }
-        dbg_dwc2_init_timeout("core_soft_reset CSFTRST (legacy)");
-        return Err(UsbError::Timeout);
+    if !new_rst_seq && poll_until(3_000_000, 32, || !dwc2.grstctl.is_set(GRSTCTL::CSFTRST)) {
+        spin_delay(4096);
+        return Ok(());
     }
-
-    // Linux `dwc2_core_reset`：Core ≥ 4.20a 时等 `CSFTRST_DONE`，再清 `CSFTRST` 并置位 `CSFTRST_DONE`。
-    for _ in 0..3_000_000u32 {
-        if dwc2.grstctl.is_set(GRSTCTL::CSFTRST_DONE) {
-            dwc2.grstctl
-                .modify(GRSTCTL::CSFTRST::CLEAR + GRSTCTL::CSFTRST_DONE::SET);
-            spin_delay(4096);
-            return Ok(());
-        }
-        spin_delay(32);
+    if new_rst_seq && poll_until(3_000_000, 32, || dwc2.grstctl.is_set(GRSTCTL::CSFTRST_DONE)) {
+        // Linux `dwc2_core_reset`：Core ≥ 4.20a 时等 `CSFTRST_DONE`，再清 `CSFTRST` 并置位 `CSFTRST_DONE`。
+        dwc2.grstctl
+            .modify(GRSTCTL::CSFTRST::CLEAR + GRSTCTL::CSFTRST_DONE::SET);
+        spin_delay(4096);
+        return Ok(());
     }
-    dbg_dwc2_init_timeout("core_soft_reset CSFTRST_DONE");
+    dbg_dwc2_init_timeout(if new_rst_seq { "core_soft_reset CSFTRST_DONE" } else { "core_soft_reset CSFTRST (legacy)" });
     Err(UsbError::Timeout)
 }
 
@@ -97,11 +83,8 @@ fn force_host_mode() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
     dwc2.gusbcfg.modify(GUSBCFG::FORCEHOSTMODE::SET);
     spin_delay(100_000);
-    for _ in 0..500_000u32 {
-        if dwc2.gintsts.is_set(GINTSTS::CURMODE_HOST) {
-            return Ok(());
-        }
-        spin_delay(32);
+    if poll_until(500_000, 32, || dwc2.gintsts.is_set(GINTSTS::CURMODE_HOST)) {
+        return Ok(());
     }
     Err(UsbError::Hardware("CURMODE_HOST not set after FORCEHOSTMODE"))
 }
@@ -157,16 +140,11 @@ pub fn dwc2_host_root_bus_reset_pulse() {
 
 fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
-    for _ in 0..3_000_000u32 {
-        let on = dwc2.grstctl.is_set(field);
-        if on == set {
-            spin_delay(64);
-            return Ok(());
-        }
-        spin_delay(8);
+    if poll_until(3_000_000, 8, || dwc2.grstctl.is_set(field) == set) {
+        spin_delay(64);
+        return Ok(());
     }
-    let label = "wait_grstctl handshake";
-    dbg_dwc2_init_timeout(label);
+    dbg_dwc2_init_timeout("wait_grstctl handshake");
     Err(UsbError::Timeout)
 }
 

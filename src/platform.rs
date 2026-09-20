@@ -2,7 +2,7 @@
 //!
 //! 全部外设物理基址集中在本模块（按物理地址升序），各驱动 `use crate::platform`
 //! 取用——BSP 风格单一事实来源；核内中断控制器（CLINT/PLIC）归 arch 层。
-//! 另带 USB 平台初始化（与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 等价,
+//! 核内中断控制器 CLINT/PLIC 的地址在 arch 层(使用方唯一)。另带 USB 平台初始化(与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 等价,
 //! 裸机 identity 映射 VA=PA 无需运行时安装）与 TOP/CLKGEN/IOBLK 寄存器视图。
 use tock_registers::interfaces::{ReadWriteable, Writeable};
 use tock_registers::{register_bitfields, register_structs};
@@ -36,6 +36,10 @@ pub const DWC2_BASE: usize = 0x0434_0000;
 pub const IVE_BASE: usize = 0x0A0A_0000;
 /// JPU JPEG 编解码器。
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
+/// mtimer 心跳计数（10ms/拍,借邮箱 ctx[3].aux——turn 只用低 4B）。
+pub const HEARTBEAT_PA: usize = 0x0190_041C;
+/// 最近被时钟打断的 PC 采样（借邮箱 ctx[1].aux,B2S 协议不使用 aux）。
+pub const LAST_PC_PA: usize = 0x0190_040C;
 
 // 预留 rtos 区共享布局（镜像加载/入口 0x8FE00000 由 memory.ld 定;区段 [0x8FE00000, 0x90000000) dtb rtos_region,
 // 大核不分配;见 memory.ld 与 yuv_buf.rs 平面几何说明）

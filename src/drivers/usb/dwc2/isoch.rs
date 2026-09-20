@@ -1,16 +1,15 @@
 //! 等时（Isochronous）IN：`IsochInEp` 端点句柄 —— 在**下一微帧**调度通道 1，
 //! 支持 HS 高带宽（mult 1..=3）。
 
-use tock_registers::interfaces::{Readable, Writeable};
+use tock_registers::interfaces::Readable;
 
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use super::regs::HCINT;
-use super::ch::{
-    Channel, hcchar_isoch, hctsiz, next_uframe_oddfrm, usb_bus_fence_before_dma, HCINT_ALL_W1C,
-};
+use super::ch::{Channel, hctsiz, next_uframe_oddfrm};
 use super::regs::{HCCHAR, HCTSIZ};
-use super::dma::{dma_phys, dma_ptr, UVC_BULK_DMA_CAP};
+use super::dma::{dma_ptr, UVC_BULK_DMA_CAP};
+use tock_registers::fields::FieldValue;
 
 /// `wMaxPacketSize` 原始值 → 低 11 位（每事务最大字节数）。
 #[inline]
@@ -51,6 +50,17 @@ impl IsochInEp {
         Self { dev, ep_num: u32::from(ep_num), mps_raw }
     }
 
+    /// 本端点的 HCCHAR(IN 方向;mult 高带宽事务数)。
+    fn hcchar(&self, mps: u32, mult: u32) -> FieldValue<u32, HCCHAR::Register> {
+        HCCHAR::MPS.val(mps)
+            + HCCHAR::EPNUM.val(self.ep_num)
+            + HCCHAR::DEVADDR.val(self.dev)
+            + HCCHAR::EPTYPE::Isochronous
+            + HCCHAR::MC.val(mult.clamp(1, 3))
+            // 等时 IN:方向恒 IN(视频流)
+            + HCCHAR::EPDIR::SET
+    }
+
     /// 在 **下一微帧** 启动一次通道，最多接收 `mult` 个 USB 事务（每个 ≤ `mps` 字节）。
     ///
     /// 返回本次实际收到的字节数（0 表示设备本微帧无数据 / 0-byte 包）。
@@ -79,23 +89,15 @@ impl IsochInEp {
         let pktcnt = mult;
 
         unsafe {
-            let hc_base = hcchar_isoch(self.dev, self.ep_num, mps, mult, true);
             let tsiz = hctsiz(pid, pktcnt, xfersize);
+            let oddfrm = next_uframe_oddfrm();
 
             let ch = Channel::VIDEO;
-            let chan = ch.chan_regs();
-            ch.wait_disabled()?;
-            // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
-            chan.hcsplt.set(0);
-            chan.hcint.set(HCINT_ALL_W1C);
-            chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
-            chan.hctsiz.set(tsiz);
-            let dmap = dma_phys(dma_off);
-            usb_bus_fence_before_dma();
-            chan.hcdma.set(dmap);
-            usb_bus_fence_before_dma();
-            let oddfrm = next_uframe_oddfrm();
-            chan.hcchar.set((hc_base + oddfrm + HCCHAR::CHENA::SET).value);
+            ch.arm(
+                tsiz,
+                (self.hcchar(mps, mult) + oddfrm + HCCHAR::CHENA::SET).value,
+                dma_off as u32,
+            )?;
 
             let st = ch.wait_halted()?;
             if st.is_set(HCINT::STALL) {
@@ -116,7 +118,7 @@ impl IsochInEp {
             if !st.is_set(HCINT::XFERCOMPL) {
                 return Ok(0);
             }
-            let rem = chan.hctsiz.read(HCTSIZ::XFERSIZE);
+            let rem = ch.chan_regs().hctsiz.read(HCTSIZ::XFERSIZE);
             let actual = xfersize.saturating_sub(rem) as usize;
             if actual > 0 {
                 cache::dcache_invalidate_after_dma(dma_ptr().add(dma_off), actual);

@@ -173,14 +173,10 @@ fn decode_and_notify(jpeg_len: usize, st: &mut PipelineStats) {
     };
 
     // IVE 硬件 CSC
-    let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
-    let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
+    let yuv = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
+    let rgb = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
     let t_ive0 = crate::arch::time::rdtime();
-    if let Err(_e) = crate::drivers::ive::csc_yuv420_to_rgb888(
-        y_pa, u_pa, v_pa, w, w / 2,
-        r_pa, g_pa, b_pa, w, w, h,
-    ) {
-    }
+    if let Err(_e) = crate::drivers::ive::csc(&yuv, &rgb, w, h) {}
     st.ive += crate::arch::time::elapsed_since(t_ive0);
 
     let reported = len.min(platform::YUV_BUF_SIZE);
