@@ -167,13 +167,18 @@ pub fn jpu_regs() -> &'static JpuRegisters {
 }
 
 /// TOP JPEG 时钟、复位、DDR remap 与 VC 子块使能，并完成 JPU 软复位。
+/// JPU 子系统时钟使能值（TOP+0x2008;Cvitek 厂商 SDK 值,位语义无公开
+/// 文档——0x3300 = 两个 2-bit 字段各 0b11,按家族惯例为时钟源选择+使能,
+/// 仅整值经真机验证:不写则 JPU 不工作,写入后 16.5fps 稳定解码）。
+const CLK_JPEG_ENABLE: u32 = 0x3300;
+
 /// 设时钟/复位/VC，但**不设 VD_REMAP**。
 /// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr\[39:32\]），
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
 pub fn hardware_init() {
     let top = crate::platform::top();
     // JPEG 时钟使能 + 复位释放(TOP 寄存器,soc.rs TopRegs 视图)
-    top.clk_jpeg.set(top.clk_jpeg.get() | 0x3300); // RMW: OR JPEG 时钟使能
+    top.clk_jpeg.set(top.clk_jpeg.get() | CLK_JPEG_ENABLE); // RMW: 只置时钟位
     top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
     // VC 子块使能(bit0-4)
     vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
@@ -203,7 +208,7 @@ pub fn hard_reset() {
     top.rst.modify(crate::platform::TOP_RST::JPEG::CLEAR);
     delay(Duration::from_millis(1));
     // 2) 时钟使能后再释放复位
-    top.clk_jpeg.set(0x3300);
+    top.clk_jpeg.set(CLK_JPEG_ENABLE);
     top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
     delay(Duration::from_millis(1));
     // 3) VC 子块重新使能
