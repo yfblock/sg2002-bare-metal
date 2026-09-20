@@ -158,7 +158,7 @@ register_structs! {
 
 /// 取 IVE 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
-fn regs() -> &'static IveRegs {
+fn ive_regs() -> &'static IveRegs {
     unsafe { &*(IVE_BASE as *const IveRegs) }
 }
 
@@ -211,7 +211,7 @@ pub fn csc_yuv420_to_rgb888(
     r_pitch: u32,
     width: u32, height: u32,
 ) -> Result<(), &'static str> {
-    let reg = regs();
+    let reg = ive_regs();
     let wm1 = width.saturating_sub(1);
     let hm1 = height.saturating_sub(1);
 

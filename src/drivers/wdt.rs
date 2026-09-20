@@ -44,7 +44,7 @@ const KICK_MAGIC: u32 = 0x76;
 
 /// 取 WDT 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
-fn regs() -> &'static DwApbWdt {
+fn wdt_regs() -> &'static DwApbWdt {
     unsafe { &*(WDT_BASE as *const DwApbWdt) }
 }
 
@@ -52,7 +52,7 @@ fn regs() -> &'static DwApbWdt {
 /// 硬件复位模式（RMOD=0）。由 `arch::time::init_heartbeat` 调用，
 /// 此后 mtimer 心跳负责喂狗。
 pub fn start() {
-    let wdt = regs();
+    let wdt = wdt_regs();
     wdt.torr.write(TORR::TIMEOUT.val(15));
     wdt.cr.write(CR::EN::SET);
     kick();
@@ -61,5 +61,5 @@ pub fn start() {
 /// 喂狗（写 CRR=0x76 重装）。心跳每 10ms 调用；wedge 时心跳停 → 复位。
 #[inline]
 pub fn kick() {
-    regs().crr.set(KICK_MAGIC);
+    wdt_regs().crr.set(KICK_MAGIC);
 }

@@ -6,18 +6,13 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
 
-use super::regs::{Dwc2HostChannel, Dwc2Regs, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
+use super::regs::{Dwc2HostChannel, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
 use crate::drivers::usb;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use tock_registers::fields::FieldValue;
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
-
-#[inline]
-pub(crate) fn regs() -> &'static Dwc2Regs {
-    usb::dwc2_regs()
-}
 
 #[inline]
 pub(crate) fn channel(ch: u32) -> &'static Dwc2HostChannel {
@@ -51,7 +46,7 @@ pub fn take_usb_isr_count() -> u32 {
 /// → PLIC source 30 → M-mode trap。本函数清 `HCINT` 并设 `CH_DONE` 唤醒等待者。
 pub fn handle_usb_irq() {
     USB_ISR_COUNT.fetch_add(1, Ordering::Relaxed);
-    let dwc2 = regs();
+    let dwc2 = usb::dwc2_regs();
     if !dwc2.gintsts.is_set(GINTSTS::HCHINT) {
         return;
     }
@@ -89,13 +84,13 @@ impl Channel {
 
     /// 通道寄存器视图。
     #[inline]
-    pub(crate) fn regs(&self) -> &'static Dwc2HostChannel {
+    pub(crate) fn chan_regs(&self) -> &'static Dwc2HostChannel {
         channel(self.0)
     }
 
     /// 等通道空闲（`CHENA` 自清）。
     pub(crate) fn wait_disabled(&self) -> UsbResult<()> {
-        let chan = self.regs();
+        let chan = self.chan_regs();
         for _ in 0..2_000_000u32 {
             if !chan.hcchar.is_set(HCCHAR::CHENA) {
                 return Ok(());
@@ -107,7 +102,7 @@ impl Channel {
 
     /// 若通道仍忙，按 Linux `dwc2_hc_halt` 同时置 `CHENA|CHDIS` 请求停止。
     pub(crate) fn halt(&self) {
-        let chan = self.regs();
+        let chan = self.chan_regs();
         if !chan.hcchar.is_set(HCCHAR::CHENA) {
             return;
         }
@@ -126,7 +121,7 @@ impl Channel {
     /// 实测每 100 帧约 69 次 ISR，而同期有 7700 次通道传输，覆盖率不到 1%。
     /// 中断链路本身是正确的（`HCINTMSK` 已编程、无误触发），只是不足以替代轮询。
     pub(crate) fn wait_halted(&self) -> UsbResult<HcintSnapshot> {
-        let chan = self.regs();
+        let chan = self.chan_regs();
         let idx = self.0 as usize;
         for _ in 0..8_000_000u32 {
             // 中断路径：USB ISR 设了 CH_DONE
@@ -153,7 +148,7 @@ impl Channel {
         hctsiz: u32,
         dma_off: u32,
     ) -> UsbResult<HcintSnapshot> {
-        let chan = self.regs();
+        let chan = self.chan_regs();
         let dmap = super::dma::dma_phys(dma_off as usize);
 
         // EP0 control 上：NAK = 设备未就绪，自动重试；XACTERR = CRC/PID/babble，
@@ -247,7 +242,7 @@ pub(crate) fn hcchar_isoch(
 /// 读 HFNUM 决定下个微帧奇偶；若当前帧 LSB=0（偶），下一帧为奇 -> 设 ODDFRM；反之清 0。
 #[inline]
 pub(crate) fn next_uframe_oddfrm() -> FieldValue<u32, HCCHAR::Register> {
-    let fr = regs().hfnum.read(HFNUM::FRNUM);
+    let fr = usb::dwc2_regs().hfnum.read(HFNUM::FRNUM);
     if (fr & 1) == 0 {
         HCCHAR::ODDFRM::SET
     } else {

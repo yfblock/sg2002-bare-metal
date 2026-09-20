@@ -79,26 +79,26 @@ register_structs! {
 
 /// 取控制器寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
-fn regs() -> &'static MboxRegs {
+fn mbox_ctrl_regs() -> &'static MboxRegs {
     unsafe { &*(HW_MBOX_BASE as *const MboxRegs) }
 }
 
 /// 小核→大核门铃：把 `(payload0, payload1)` 写入 slot0 并敲铃中断大核。
 pub unsafe fn doorbell_big(payload0: u32, payload1: u32) {
-    let slot = &regs().ctx[SLOT_S2B];
+    let slot = &mbox_ctrl_regs().ctx[SLOT_S2B];
     slot.payload.set(payload0);
     slot.aux.set(payload1);
 
-    let big = &regs().banks[CPU_BIG];
+    let big = &mbox_ctrl_regs().banks[CPU_BIG];
     big.int_clr.set(1 << SLOT_S2B);
     // 显式解除 int_mask（reset 默认应为 0；写 0 排除“被 mask 掉所以不上 PLIC”的可能）。
     big.int_mask.set(0);
 
-    let en = &regs().cpu1_en;
+    let en = &mbox_ctrl_regs().cpu1_en;
     // 绝对写:cpu1_en 只有 slot0(S2B)一个使用者,不 RMW(同 claim_b2s 的理由)。
     en.set(1 << SLOT_S2B);
 
-    regs().mbox_set.set(1 << SLOT_S2B);
+    mbox_ctrl_regs().mbox_set.set(1 << SLOT_S2B);
 }
 
 /// 大核→小核：认领一条消息（由小核邮箱 ISR 调用）。
@@ -108,14 +108,14 @@ pub unsafe fn doorbell_big(payload0: u32, payload1: u32) {
 /// 小核 ISR 消费后关 en bit 的副作用，同时被大核用作「消费确认」证据
 /// （tools/b2s-comm-test-bm 轮询 `cpu_mbox_en[2]` bit 清零）。
 pub unsafe fn claim_b2s() -> Option<u32> {
-    let small = &regs().banks[CPU_SMALL];
+    let small = &mbox_ctrl_regs().banks[CPU_SMALL];
     let int_val = small.int_val.get();
     if int_val & (1 << SLOT_B2S) == 0 {
         return None;
     }
     // ① 先取 payload:大核把「en 清零」当消费确认,一旦清 en 它就可能覆写
     //    ctx slot1 发下一轮——payload 必须在此之前读走。
-    let slot = &regs().ctx[SLOT_B2S];
+    let slot = &mbox_ctrl_regs().ctx[SLOT_B2S];
     let msg = slot.payload.get();
     slot.payload.set(0);
     // 注意:ctx[1].aux(0x0190_040C)已被 mtimer 心跳借用为 PC 采样,这里不再清零。
@@ -124,6 +124,6 @@ pub unsafe fn claim_b2s() -> Option<u32> {
     // ③ 最后清 en。绝对写 0:cpu2_en 只有 slot1(B2S)一个使用者,而大核
     //    b2s_send 对同一字 RMW 置位——跨核 RMW 交错会把刚清的位复活,
     //    大核的消费确认(b2s_consumed 轮询该位)从此永假,双侧卡死。
-    regs().cpu2_en.set(0);
+    mbox_ctrl_regs().cpu2_en.set(0);
     Some(msg)
 }

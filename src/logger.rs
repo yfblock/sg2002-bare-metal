@@ -43,15 +43,15 @@ const UART0_BASE: usize = 0x0414_0000;
 
 /// 取 UART0 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
-fn regs() -> &'static Dw8250Uart {
+fn uart_regs() -> &'static Dw8250Uart {
     unsafe { &*(UART0_BASE as *const Dw8250Uart) }
 }
 
 /// 阻塞发送一个字节（轮询 LSR.THRE）。`\n` 不自动加 `\r`——由 [`print`] 处理。
 #[inline]
 pub(crate) fn uart_putc(c: u8) {
-    while !regs().lsr.is_set(LSR::THRE) {}
-    regs().thr.set(c as u32);
+    while !uart_regs().lsr.is_set(LSR::THRE) {}
+    uart_regs().thr.set(c as u32);
 }
 
 // ---- 跨核行锁(Dekker,纯 load/store)----

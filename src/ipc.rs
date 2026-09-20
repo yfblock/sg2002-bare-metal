@@ -44,7 +44,7 @@ register_structs! {
 
 /// 取 DRAM 邮箱视图（identity 映射，基址为编译期常量，恒有效）。
 #[inline]
-fn regs() -> &'static MailboxRegs {
+fn dram_mbox_regs() -> &'static MailboxRegs {
     unsafe { &*(MAILBOX_PA as *const MailboxRegs) }
 }
 
@@ -78,7 +78,7 @@ fn flush_mailbox() {
 
 /// 整结构写入邮箱（启动存活标记 / panic 标记用；帧信息走 [`notify`]）。
 pub fn write(frame_count: u32, yuv_size: u32, flags: u32) {
-    let mbox = regs();
+    let mbox = dram_mbox_regs();
     mbox.magic.set(MAILBOX_MAGIC);
     mbox.frame_count.set(frame_count);
     mbox.yuv_size.set(yuv_size);
@@ -95,7 +95,7 @@ pub fn write(frame_count: u32, yuv_size: u32, flags: u32) {
 /// reply 字段由中断上下文的 `write_reply` 写，整结构读改写会在
 /// "读 current → 写回" 之间把 ISR 刚写的 reply 覆盖掉（13 FPS 下必然丢）。
 pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
-    let mbox = regs();
+    let mbox = dram_mbox_regs();
     mbox.frame_count.set(frame_count);
     mbox.yuv_size.set(yuv_size);
     mbox.flags.set(flags);
@@ -113,7 +113,7 @@ pub fn notify(frame_count: u32, yuv_size: u32, flags: u32) {
 /// 只碰 offset 16..32（大核→小核那一半），和 `notify` 写的 0..16 完全不重叠，
 /// 所以中断上下文和主循环并发写也不会互相覆盖。
 pub fn write_reply(msg: u32) {
-    let mbox = regs();
+    let mbox = dram_mbox_regs();
     let seq = mbox.reply_seq.get();
     mbox.reply_data.set(msg);
     mbox.reply_seq.set(seq.wrapping_add(1));

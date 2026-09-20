@@ -84,7 +84,7 @@ impl IsochInEp {
             let tsiz = hctsiz(pid, pktcnt, xfersize);
 
             let ch = Channel::VIDEO;
-            let chan = ch.regs();
+            let chan = ch.chan_regs();
             ch.wait_disabled()?;
             ch.halt();
             chan.hcsplt.set(0);
