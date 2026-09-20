@@ -63,13 +63,9 @@ extern "C" fn rust_trap_handler(mcause: Mcause, cur_sp: usize) -> usize {
             let mtval = riscv::register::mtval::read();
             // 故障信息优先于锁:try 一次,拿不到也硬打(乱码可忍,丢 fault 不可忍)
             let _lk = uart::line_lock_try();
-            uart::print_nolock("\n!!! C906L FAULT: mcause=");
-            uart::print_hex_nolock(mcause.bits() as u64);
-            uart::print_nolock(" mepc=");
-            uart::print_hex_nolock(mepc as u64);
-            uart::print_nolock(" mtval=");
-            uart::print_hex_nolock(mtval as u64);
-            uart::print_nolock(" !!!\n");
+            uart::print_fmt_nolock(format_args!(
+                "\n!!! C906L FAULT: mcause={:#x} mepc={:#x} mtval={:#x} !!!\n",
+                mcause.bits() as u64, mepc as u64, mtval as u64));
             if _lk {
                 uart::line_unlock();
             }

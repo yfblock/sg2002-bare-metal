@@ -90,11 +90,7 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
             let n = RESET_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             // 节流：第 1、每 16 次打印一次，避免冲掉大核串口。
             if n == 1 || n % 16 == 0 {
-                uart::print("[JPU] decode err=");
-                uart::print(e);
-                uart::print(" reset#");
-                uart::print_hex(n as u64);
-                uart::print("\n");
+                uart::print_fmt(format_args!("[JPU] decode err={e} reset#{n:#x}\n"));
             }
             *cell = None; // drop 旧 decoder（释放 stream/frame buf）
             match create_decoder() {

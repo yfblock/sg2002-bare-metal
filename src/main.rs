@@ -206,50 +206,35 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
         frames * crate::arch::time::TIMEBASE_HZ * 100 / dt
     } else { 0 };
 
-    platform::uart::print("[FPS] frames=");
-    platform::uart::print_dec(frame_count as u64);
-    platform::uart::print(" fps=");
-    platform::uart::print_dec(fps_x100 / 100);
-    platform::uart::print(".");
-    let frac = fps_x100 % 100;
-    if frac < 10 { platform::uart::print("0"); }
-    platform::uart::print_dec(frac);
-    platform::uart::print(" bytes/frame=");
-    platform::uart::print_dec(st.byte_acc / frames.max(1));
     let kbps = if dt > 0 { st.byte_acc * crate::arch::time::TIMEBASE_HZ / dt / 1024 } else { 0 };
-    platform::uart::print(" KB/s=");
-    platform::uart::print_dec(kbps);
     let us = |t: u64| t * 1_000_000 / crate::arch::time::TIMEBASE_HZ / frames.max(1);
-    platform::uart::print(" us{cap=");
-    platform::uart::print_dec(us(st.tick_cap));
-    platform::uart::print(" dec=");
-    platform::uart::print_dec(us(st.tick_dec));
-    platform::uart::print(" ive=");
-    platform::uart::print_dec(us(st.tick_ive));
-    // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
-    platform::uart::print(" hb=");
-    platform::uart::print_dec(unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) } as u64);
-    platform::uart::print("} jpu{inv1=");
-    platform::uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
-        crate::drivers::jpu::trace::step::INV_FRAME) as u64));
-    platform::uart::print(" poll=");
-    platform::uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
-        crate::drivers::jpu::trace::step::POLL) as u64));
-    platform::uart::print(" inv2=");
-    platform::uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
-        crate::drivers::jpu::trace::step::INV_AFTER) as u64));
-    platform::uart::print(" cpy=");
-    platform::uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
-        crate::drivers::jpu::trace::step::COPY_STREAM) as u64));
-    platform::uart::print(" cln=");
-    platform::uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
-        crate::drivers::jpu::trace::step::CLEAN_STREAM) as u64));
-    platform::uart::print("}");
-    platform::uart::print(" usbisr=");
-    platform::uart::print_dec(crate::drivers::usb::dwc2::take_usb_isr_count() as u64);
-    platform::uart::print(" jpu_err=");
-    platform::uart::print_dec(jpu::reset_count() as u64);
-    platform::uart::print("\n");
+    platform::uart::print_fmt(format_args!(
+        "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
+         us{{cap={} dec={} ive={} hb={}}} \
+         jpu{{inv1={} poll={} inv2={} cpy={} cln={}}} usbisr={} jpu_err={}\n",
+        frame_count,
+        fps_x100 / 100,
+        fps_x100 % 100,
+        st.byte_acc / frames.max(1),
+        kbps,
+        us(st.tick_cap),
+        us(st.tick_dec),
+        us(st.tick_ive),
+        // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
+        unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) },
+        us(crate::drivers::jpu::trace::take_step_ticks(
+            crate::drivers::jpu::trace::step::INV_FRAME) as u64),
+        us(crate::drivers::jpu::trace::take_step_ticks(
+            crate::drivers::jpu::trace::step::POLL) as u64),
+        us(crate::drivers::jpu::trace::take_step_ticks(
+            crate::drivers::jpu::trace::step::INV_AFTER) as u64),
+        us(crate::drivers::jpu::trace::take_step_ticks(
+            crate::drivers::jpu::trace::step::COPY_STREAM) as u64),
+        us(crate::drivers::jpu::trace::take_step_ticks(
+            crate::drivers::jpu::trace::step::CLEAN_STREAM) as u64),
+        crate::drivers::usb::dwc2::take_usb_isr_count(),
+        jpu::reset_count(),
+    ));
 
     st.tick_cap = 0;
     st.tick_dec = 0;

@@ -173,9 +173,7 @@ pub fn handle_mailbox_irq() {
             // 三段输出拼在一次锁窗口内,保证 [MB-RX] 行不被大核打断
             use crate::platform::uart;
             if uart::line_lock_try() {
-                uart::print_nolock("[MB-RX] big->small msg=");
-                uart::print_hex_nolock(msg as u64);
-                uart::print_nolock("\n");
+                uart::print_fmt_nolock(format_args!("[MB-RX] big->small msg={:#x}\n", msg));
                 uart::line_unlock();
             }
         }

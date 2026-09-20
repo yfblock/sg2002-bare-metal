@@ -9,6 +9,7 @@
 //! 策略:主循环 `print` 短自旋后**强制夺取**(防上电遗留脏值死锁);
 //! **ISR 上下文用 `line_lock_try`,拿不到就丢行,绝不等待**。
 
+use core::fmt::Write as _;
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::{ReadOnly, WriteOnly};
@@ -144,19 +145,6 @@ pub(crate) fn print_nolock(s: &str) {
     }
 }
 
-/// 无锁十六进制(调用方必须已持锁)
-pub(crate) fn print_hex_nolock(v: u64) {
-    print_nolock("0x");
-    let mut started = false;
-    for shift in (0..64).step_by(4).rev() {
-        let nib = ((v >> shift) & 0xf) as u8;
-        if nib != 0 || started || shift == 0 {
-            uart_putc(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 });
-            started = true;
-        }
-    }
-}
-
 /// 打印字符串；`\n` 自动转成 `\r\n`（串口终端需要）。持跨核行锁。
 pub(crate) fn print(s: &str) {
     if crate::ipc::muted() {
@@ -167,33 +155,28 @@ pub(crate) fn print(s: &str) {
     line_unlock();
 }
 
-/// 打印 `0x` 前缀的 64 位十六进制。持跨核行锁(整段一次锁)。
-pub(crate) fn print_hex(v: u64) {
+/// `core::fmt::Write` 端点:持锁上下文内把格式化字节直写 UART
+/// (`\n` → `\r\n` 由 [`print_nolock`] 处理)。
+struct UartFmt;
+
+impl core::fmt::Write for UartFmt {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        print_nolock(s);
+        Ok(())
+    }
+}
+
+/// 无锁格式化打印(调用方必须已持锁;ISR/FAULT 路径用,不受 mute 门控)。
+pub(crate) fn print_fmt_nolock(args: core::fmt::Arguments<'_>) {
+    let _ = UartFmt.write_fmt(args);
+}
+
+/// 格式化打印(`format_args!`);`\n` 自动转 `\r\n`。持跨核行锁(整段一次),受 mute 门控。
+pub(crate) fn print_fmt(args: core::fmt::Arguments<'_>) {
     if crate::ipc::muted() {
         return;
     }
     line_lock_wait();
-    print_hex_nolock(v);
+    let _ = UartFmt.write_fmt(args);
     line_unlock();
-}
-
-/// 打印 64 位十进制。
-pub(crate) fn print_dec(n: u64) {
-    if crate::ipc::muted() {
-        return;
-    }
-    let mut buf = [0u8; 20];
-    let mut i = buf.len();
-    let mut n = n;
-    if n == 0 {
-        i -= 1;
-        buf[i] = b'0';
-    }
-    while n > 0 {
-        i -= 1;
-        buf[i] = b'0' + (n % 10) as u8;
-        n /= 10;
-    }
-    let s = core::str::from_utf8(&buf[i..]).unwrap_or("?");
-    print(s);
 }
