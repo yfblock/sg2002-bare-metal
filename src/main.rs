@@ -49,6 +49,8 @@ mod platform;
 
 // 硬件驱动(从 sg200x-bsp 迁移)
 mod drivers;
+/// FPS 报告间隔(帧数)
+const FPS_REPORT_EVERY: u32 = 100;
 
 use crate::drivers::usb::{dwc2::{self, Ep0}, uvc};
 use crate::drivers::usb::enumerate_camera;
@@ -86,9 +88,6 @@ pub(crate) extern "C" fn rust_main() -> ! {
     // 进入主循环(永不返回)
     pipeline_loop(&ep0, &sel)
 }
-
-/// FPS 报告间隔(帧数)
-const FPS_REPORT_EVERY: u32 = 100;
 
 /// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
 struct PipelineStats {

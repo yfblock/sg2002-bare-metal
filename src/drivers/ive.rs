@@ -24,6 +24,21 @@ use crate::arch::time::{elapsed_since, rdtime};
 /// IVE 寄存器基址。
 use crate::platform::IVE_BASE;
 
+/// BT.601 limited range YUV→RGB 系数（Video BT601 YUV2RGB, mode 0）。
+/// 布局：{c00,c01,c02,off0, c10,c11,c12,off1, c20,c21,c22,off2}
+/// 来自 cvi_ive_platform.c coef_BT601_to_GBR_16_235。
+const CSC_COEF_BT601_LIMIT: [u32; 12] = [
+    1024, 0, 1404, 179188, 1024, 344, 715, 136040, 1024, 1774, 0, 226505,
+];
+
+/// IMG_IN 的 `fmt_sel` 覆盖值。
+///
+/// 硬件格式枚举没有可用的数据手册，`FMT_YUV420P = 0` 是逆向 osdrv 得到的，
+/// 摄像头实际输出是 YUV422，对应的编码未知。做成运行时可写，
+/// 配合大核的比对工具扫描候选值——哪个值让 IVE 输出与软件 CSC 参考一致，
+/// 哪个就是对的。`u32::MAX` 表示"用默认值"。
+static FMT_SEL_OVERRIDE: AtomicU32 = AtomicU32::new(u32::MAX);
+
 register_bitfields![u32,
     /// TOP +0x04：软复位 / 启动。
     pub TopCtrl1 [
@@ -161,21 +176,6 @@ register_structs! {
 fn ive_regs() -> &'static IveRegs {
     unsafe { &*(IVE_BASE as *const IveRegs) }
 }
-
-/// BT.601 limited range YUV→RGB 系数（Video BT601 YUV2RGB, mode 0）。
-/// 布局：{c00,c01,c02,off0, c10,c11,c12,off1, c20,c21,c22,off2}
-/// 来自 cvi_ive_platform.c coef_BT601_to_GBR_16_235。
-const CSC_COEF_BT601_LIMIT: [u32; 12] = [
-    1024, 0, 1404, 179188, 1024, 344, 715, 136040, 1024, 1774, 0, 226505,
-];
-
-/// IMG_IN 的 `fmt_sel` 覆盖值。
-///
-/// 硬件格式枚举没有可用的数据手册，`FMT_YUV420P = 0` 是逆向 osdrv 得到的，
-/// 摄像头实际输出是 YUV422，对应的编码未知。做成运行时可写，
-/// 配合大核的比对工具扫描候选值——哪个值让 IVE 输出与软件 CSC 参考一致，
-/// 哪个就是对的。`u32::MAX` 表示"用默认值"。
-static FMT_SEL_OVERRIDE: AtomicU32 = AtomicU32::new(u32::MAX);
 
 /// 设置 IMG_IN `fmt_sel` 覆盖值（`u32::MAX` = 恢复默认）。
 pub fn set_input_fmt(fmt: u32) {

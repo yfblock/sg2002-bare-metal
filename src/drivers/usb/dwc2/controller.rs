@@ -15,6 +15,10 @@ use core::time::Duration;
 
 use crate::arch::time::delay;
 use crate::drivers::usb;
+const DWC2_CORE_REV_2_91A: u32 = 0x4f54_291a;
+/// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 此版本用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
+const DWC2_CORE_REV_4_20A: u32 = 0x4f54_420a;
+const DWC2_CORE_REV_MASK: u32 = 0xffff;
 use super::ch::{poll_until, spin_delay};
 use tock_registers::registers::ReadWrite;
 use super::regs::{
@@ -41,10 +45,6 @@ fn dbg_dwc2_init_timeout(phase: &'static str) {
 }
 
 // Linux `core.h`：`snpsid >= 0x4f54291a` 时配置 `GDFIFOCFG`（`hcd.c`）。
-const DWC2_CORE_REV_2_91A: u32 = 0x4f54_291a;
-/// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 此版本用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
-const DWC2_CORE_REV_4_20A: u32 = 0x4f54_420a;
-const DWC2_CORE_REV_MASK: u32 = 0xffff;
 
 fn wait_ahb_idle() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();

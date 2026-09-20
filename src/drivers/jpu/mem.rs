@@ -3,6 +3,12 @@
 //! 在静态对齐缓冲上实现 16 KiB 页位图分配；所有 `unsafe` 集中在本模块。
 
 use core::cell::SyncUnsafeCell;
+
+/// 位图字数:pool 尺寸在 init 时钳制到 `JPU_DRAM_PHYSICAL_SIZE`,页数上限
+/// `JPU_DRAM_PHYSICAL_SIZE / VMEM_PAGE_SIZE`(1 MiB / 16 KiB = 64 页 = 1 字),
+/// 由此静态定长,alloc/free 无需再查位图越界。
+const BITMAP_WORDS: usize =
+    JPU_DRAM_PHYSICAL_SIZE.div_ceil(VMEM_PAGE_SIZE).div_ceil(u64::BITS as usize);
 use super::regs::{JPU_DRAM_PHYSICAL_SIZE, VMEM_PAGE_SIZE};
 
 /// 由 JPU 内存池分配的物理地址区间。
@@ -17,12 +23,6 @@ impl PhysBuffer {
         self.addr == 0 || self.size == 0
     }
 }
-
-/// 位图字数:pool 尺寸在 init 时钳制到 `JPU_DRAM_PHYSICAL_SIZE`,页数上限
-/// `JPU_DRAM_PHYSICAL_SIZE / VMEM_PAGE_SIZE`(1 MiB / 16 KiB = 64 页 = 1 字),
-/// 由此静态定长,alloc/free 无需再查位图越界。
-const BITMAP_WORDS: usize =
-    JPU_DRAM_PHYSICAL_SIZE.div_ceil(VMEM_PAGE_SIZE).div_ceil(u64::BITS as usize);
 
 struct JpuMemoryPool {
     base_addr: usize,

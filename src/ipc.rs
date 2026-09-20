@@ -15,6 +15,14 @@ use tock_registers::registers::ReadWrite;
 
 use crate::drivers::mailbox as hw;
 use crate::logger;
+pub const MAILBOX_PA: usize = 0x9004_0000;
+pub const MAILBOX_MAGIC: u32 = 0xC906_C906;
+pub const REPLY_MAGIC: u32 = 0x52504C59;
+
+/// flags 位定义
+pub const FLAG_SOI: u32 = 1 << 0;
+pub const FLAG_EOI: u32 = 1 << 1;
+pub const FLAG_YUV_READY: u32 = 1 << 15;
 
 // DRAM 邮箱（32 字节，tock-registers 视图）
 
@@ -46,15 +54,6 @@ register_structs! {
 fn dram_mbox_regs() -> &'static MailboxRegs {
     unsafe { &*(MAILBOX_PA as *const MailboxRegs) }
 }
-
-pub const MAILBOX_PA: usize = 0x9004_0000;
-pub const MAILBOX_MAGIC: u32 = 0xC906_C906;
-pub const REPLY_MAGIC: u32 = 0x52504C59;
-
-/// flags 位定义
-pub const FLAG_SOI: u32 = 1 << 0;
-pub const FLAG_EOI: u32 = 1 << 1;
-pub const FLAG_YUV_READY: u32 = 1 << 15;
 
 /// 把 width/height 编码到 flags 的高位（解码在读者侧，见 b2s-comm-test）。
 pub fn encode_dims(w: u32, h: u32) -> u32 {

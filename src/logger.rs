@@ -18,6 +18,8 @@ use core::fmt::Write as _;
 use core::sync::atomic::Ordering;
 
 use crate::drivers::mailbox::{CTX_SLOT2, CTX_SLOT3};
+const ME: usize = 1; // 小核 = 1;大核 = 0
+const LOCK_SPIN_LIMIT: u32 = 2_000_000; // 自旋上限;超时强闯(防上电遗留脏值)
 use crate::platform::UART0_BASE;
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::{Readable, Writeable};
@@ -62,8 +64,6 @@ pub(crate) fn uart_putc(c: u8) {
 //   flag_small @ slot2 低4B(只小核写)/ flag_big @ slot2 高4B(只大核写)
 //   turn       @ slot3 低4B(双方写,竞争时决定谁让行)
 // 两侧实现必须同款(大核侧 tools/bigcore-bm/src/main.rs)。
-const ME: usize = 1; // 小核 = 1;大核 = 0
-const LOCK_SPIN_LIMIT: u32 = 2_000_000; // 自旋上限;超时强闯(防上电遗留脏值)
 
 #[inline]
 fn flag_addr(cpu: usize) -> usize {

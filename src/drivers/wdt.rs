@@ -10,6 +10,11 @@ use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::Writeable;
 use tock_registers::registers::{ReadWrite, WriteOnly};
 
+use crate::platform::WDT_BASE;
+
+/// 喂狗魔法值（DW WDT 规定写 0x76 重装计数器）。
+const KICK_MAGIC: u32 = 0x76;
+
 register_bitfields![u32,
     /// WDT_CR（0x00）：控制。
     pub CR [
@@ -36,11 +41,6 @@ register_structs! {
         (0x10 => @END),
     }
 }
-
-/// WDT MMIO 基址（SG2002 dts `cv-wd@0x3010000`）。
-use crate::platform::WDT_BASE;
-/// 喂狗魔法值（DW WDT 规定写 0x76 重装计数器）。
-const KICK_MAGIC: u32 = 0x76;
 
 /// 取 WDT 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]

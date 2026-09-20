@@ -7,6 +7,21 @@
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup;
+/// USB `bDeviceClass`：Hub。
+const USB_CLASS_HUB: u8 = 0x09;
+/// QEMU 默认 `usb-hub`（插在根口与首个外设之间）VID/PID。
+const QEMU_USB_HUB_VID: u16 = 0x0409;
+const QEMU_USB_HUB_PID: u16 = 0x55aa;
+
+const MAX_USB_ADDR: u8 = 127;
+/// Hub 描述符 bNbrPorts 上限(防描述符异常值撑爆定长数组)。
+const MAX_HUB_PORTS: u8 = 16;
+
+#[derive(Clone, Copy, Debug)]
+pub struct UvcEnumerated {
+    pub addr: u8,
+    pub ep0_mps: u32,
+}
 
 /// 拓扑日志缩进（每级 2 空格）。
 #[inline]
@@ -38,22 +53,6 @@ macro_rules! topo_log {
         )
     };
 }
-
-/// USB `bDeviceClass`：Hub。
-const USB_CLASS_HUB: u8 = 0x09;
-/// QEMU 默认 `usb-hub`（插在根口与首个外设之间）VID/PID。
-const QEMU_USB_HUB_VID: u16 = 0x0409;
-const QEMU_USB_HUB_PID: u16 = 0x55aa;
-
-const MAX_USB_ADDR: u8 = 127;
-
-#[derive(Clone, Copy, Debug)]
-pub struct UvcEnumerated {
-    pub addr: u8,
-    pub ep0_mps: u32,
-}
-
-const MAX_HUB_PORTS: u8 = 16;
 
 #[derive(Debug, Clone, Copy)]
 struct ScanState {

@@ -10,6 +10,8 @@ use super::regs::{Dwc2HostChannel, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
 use crate::drivers::usb;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use tock_registers::fields::FieldValue;
+/// HCINT 写 1 清除：清完整 11 位（含 ACK/NYET 等）。
+pub(crate) const HCINT_ALL_W1C: u32 = 0x7FF;
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
@@ -19,9 +21,6 @@ pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 /// 通过 [`Channel::CONTROL`] / [`Channel::VIDEO`] 选定。
 #[derive(Clone, Copy)]
 pub struct Channel(u32);
-
-/// HCINT 写 1 清除：清完整 11 位（含 ACK/NYET 等）。
-pub(crate) const HCINT_ALL_W1C: u32 = 0x7FF;
 
 /// 每个通道的「传输完成」flag，由 USB ISR (`handle_usb_irq`) 置位，
 /// [`Channel::wait_halted`] 每轮检查一次。下标 = 通道号（0=EP0, 1=Isoch）。
@@ -197,7 +196,6 @@ impl Channel {
         unreachable!()
     }
 }
-
 
 /// 读 HFNUM 决定下个微帧奇偶；若当前帧 LSB=0（偶），下一帧为奇 -> 设 ODDFRM；反之清 0。
 #[inline]

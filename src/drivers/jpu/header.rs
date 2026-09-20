@@ -9,6 +9,45 @@
 
 use super::regs::{FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444};
 
+const MARKER_SIZE: usize = 2;
+/// 段长度字段在 i+2 起,大端 u16
+const SEG_LENGTH_OFF: usize = 2;
+
+const SOF_HEIGHT_OFF: usize = 5;
+const SOF_WIDTH_OFF: usize = 7;
+const SOF_NCOMP_OFF: usize = 9;
+/// SOF 组件条目区起点(i+10)
+const SOF_COMPS_OFF: usize = 10;
+/// SOF 组件条目 3 字节:ID | (H<<4)|V | 量化表号
+const COMP_ENTRY_SIZE: usize = 3;
+const COMP_SAMPLING_OFF: usize = 1;
+const COMP_QUANT_OFF: usize = 2;
+/// JPEG 基线最多 3 分量(Y/Cb/Cr)
+const NUM_JPEG_COMPS: usize = 3;
+
+/// SOS:Ns 在 i+4,其后每扫描分量 2 字节(ID | (Td<<4)|Ta)
+const SOS_NCOMP_OFF: usize = 4;
+const SOS_COMPS_OFF: usize = 5;
+const SCAN_COMP_ENTRY_SIZE: usize = 2;
+const SCAN_COMP_TABLES_OFF: usize = 1;
+
+/// DRI:重启间隔 Ri 在 i+4 起,大端 u16
+const DRI_INTERVAL_OFF: usize = 4;
+
+// DHT / DQT 表结构
+
+/// 霍夫曼码长档数(1..16 bit)
+const HUFF_LENGTH_COUNT: usize = 16;
+/// 单张霍夫曼表头 = Tc/Th(1 字节) + 码长计数(16 字节)
+const DHT_TABLE_HDR_SIZE: usize = 1 + HUFF_LENGTH_COUNT;
+/// 量化表 8×8 = 64 系数;16-bit 模式每项 2 字节
+const DQT_TABLE_ENTRIES: usize = 64;
+
+/// 空 code-length 档的哨兵:该长度无码
+const HUFF_NO_CODE: u32 = 0xFFFF;
+/// 无效霍夫曼值指针哨兵
+const HUFF_NO_PTR: u8 = 0xFF;
+
 // JPEG 标记码（T.81 Table B.1）
 
 const MARKER_PREFIX: u8 = 0xFF;
@@ -77,44 +116,6 @@ impl Marker {
 // 段结构布局(相对 0xFF 所在位置 i 的字节偏移)
 
 /// 标记占 2 字节(FF + 码)
-const MARKER_SIZE: usize = 2;
-/// 段长度字段在 i+2 起,大端 u16
-const SEG_LENGTH_OFF: usize = 2;
-
-const SOF_HEIGHT_OFF: usize = 5;
-const SOF_WIDTH_OFF: usize = 7;
-const SOF_NCOMP_OFF: usize = 9;
-/// SOF 组件条目区起点(i+10)
-const SOF_COMPS_OFF: usize = 10;
-/// SOF 组件条目 3 字节:ID | (H<<4)|V | 量化表号
-const COMP_ENTRY_SIZE: usize = 3;
-const COMP_SAMPLING_OFF: usize = 1;
-const COMP_QUANT_OFF: usize = 2;
-/// JPEG 基线最多 3 分量(Y/Cb/Cr)
-const NUM_JPEG_COMPS: usize = 3;
-
-/// SOS:Ns 在 i+4,其后每扫描分量 2 字节(ID | (Td<<4)|Ta)
-const SOS_NCOMP_OFF: usize = 4;
-const SOS_COMPS_OFF: usize = 5;
-const SCAN_COMP_ENTRY_SIZE: usize = 2;
-const SCAN_COMP_TABLES_OFF: usize = 1;
-
-/// DRI:重启间隔 Ri 在 i+4 起,大端 u16
-const DRI_INTERVAL_OFF: usize = 4;
-
-// DHT / DQT 表结构
-
-/// 霍夫曼码长档数(1..16 bit)
-const HUFF_LENGTH_COUNT: usize = 16;
-/// 单张霍夫曼表头 = Tc/Th(1 字节) + 码长计数(16 字节)
-const DHT_TABLE_HDR_SIZE: usize = 1 + HUFF_LENGTH_COUNT;
-/// 量化表 8×8 = 64 系数;16-bit 模式每项 2 字节
-const DQT_TABLE_ENTRIES: usize = 64;
-
-/// 空 code-length 档的哨兵:该长度无码
-const HUFF_NO_CODE: u32 = 0xFFFF;
-/// 无效霍夫曼值指针哨兵
-const HUFF_NO_PTR: u8 = 0xFF;
 /// 霍夫曼表槽的 JPU 排布:slot bit1 = Th 低位、bit0 = Tc 低位(厂商驱动同款映射)
 fn huff_slot(tc: u8, th: u8) -> usize {
     (((th & 1) << 1) | (tc & 1)) as usize

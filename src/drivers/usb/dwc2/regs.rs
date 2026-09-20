@@ -6,6 +6,9 @@ use tock_registers::{
     registers::{ReadOnly, ReadWrite},
 };
 
+/// GHWCFG2.NUM_HOST_CHAN 字段理论上限;本驱动仅用通道 0/1。
+pub const DWC2_MAX_HOST_CHANNELS: usize = 16;
+
 register_bitfields![u32,
     /// AHB 总线配置（DMA、突发长度、全局中断使能）。
     pub GAHBCFG [
@@ -158,8 +161,6 @@ register_structs! {
         (0x20 => @END),
     }
 }
-
-pub const DWC2_MAX_HOST_CHANNELS: usize = 16;
 
 register_structs! {
     /// 完整 DWC2 寄存器映射（仅声明本驱动使用到的字段；其余区段留作 reserved）。

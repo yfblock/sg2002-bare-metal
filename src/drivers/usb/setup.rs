@@ -6,6 +6,24 @@
 //! 类专用 SETUP 见各类：UVC 的 VS 控制在 [`crate::drivers::usb::uvc::setup`]。
 //! （MSC 等 Bulk 类协议未移植本树，需要时见 sg200x-bsp。）
 
+/// Hub 端口特性：`PORT_RESET`。
+pub const HUB_PORT_FEATURE_RESET: u16 = 4;
+/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
+pub const HUB_PORT_FEATURE_POWER: u16 = 8;
+/// Hub 端口特性：`C_PORT_CONNECTION`（端口"连接发生变化"位，CLEAR 用）。
+pub const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
+/// Hub 端口特性：`C_PORT_RESET`。
+pub const HUB_PORT_FEATURE_C_RESET: u16 = 20;
+
+/// `USB_DT_CONFIGURATION`（`GET_DESCRIPTOR` 高字节）。
+pub const USB_DT_CONFIGURATION: u8 = 2;
+/// `USB_DT_INTERFACE`（接口描述符的 `bDescriptorType`）。
+pub const USB_DT_INTERFACE: u8 = 4;
+/// Hub 类描述符类型（`GET_DESCRIPTOR` 高字节）。
+pub const USB_DT_HUB: u8 = 0x29;
+/// 接口类：Video。
+pub const USB_CLASS_VIDEO: u8 = 0x0e;
+
 /// 构造标准 `GET_DESCRIPTOR(Device)` 的 8 字节 SETUP（`wLength` 固定 18 = 整份设备描述符）。
 #[inline]
 pub fn get_descriptor_device() -> [u8; 8] {
@@ -94,24 +112,6 @@ pub fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
         0,
     ]
 }
-
-/// Hub 端口特性：`PORT_RESET`。
-pub const HUB_PORT_FEATURE_RESET: u16 = 4;
-/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
-pub const HUB_PORT_FEATURE_POWER: u16 = 8;
-/// Hub 端口特性：`C_PORT_CONNECTION`（端口"连接发生变化"位，CLEAR 用）。
-pub const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
-/// Hub 端口特性：`C_PORT_RESET`。
-pub const HUB_PORT_FEATURE_C_RESET: u16 = 20;
-
-/// `USB_DT_CONFIGURATION`（`GET_DESCRIPTOR` 高字节）。
-pub const USB_DT_CONFIGURATION: u8 = 2;
-/// `USB_DT_INTERFACE`（接口描述符的 `bDescriptorType`）。
-pub const USB_DT_INTERFACE: u8 = 4;
-/// Hub 类描述符类型（`GET_DESCRIPTOR` 高字节）。
-pub const USB_DT_HUB: u8 = 0x29;
-/// 接口类：Video。
-pub const USB_CLASS_VIDEO: u8 = 0x0e;
 
 /// 构造 `GET_DESCRIPTOR(Configuration)` — 对**已分配地址**的设备使用。
 ///

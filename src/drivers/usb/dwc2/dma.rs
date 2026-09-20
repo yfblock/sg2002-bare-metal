@@ -6,6 +6,19 @@ use crate::drivers::usb::error::{UsbError, UsbResult};
 /// EP0 SETUP 包 + 小数据缓冲区的区域大小（DMA 窗口头部的 1KiB）。
 pub(crate) const EP0_REGION_BYTES: usize = 1024;
 
+/// UVC 等时传输使用的 DMA 区起始偏移（紧跟在 1KiB EP0 工作区之后）。
+pub const DMA_OFF_UVC_BULK: usize = EP0_REGION_BYTES;
+/// UVC 视频缓冲容量；前 `UVC_WORK_AREA_BYTES` 用作单微帧 RX 工作区，其余拼接 JPEG。
+/// 720p MJPEG 单帧典型 100-300KB，需要 ≥320KB 的 JPEG 区。
+pub const UVC_BULK_DMA_CAP: usize = 384 * 1024;
+
+/// 整个 `DmaBuf` 大小（供边界检查）。
+const DMA_BUF_TOTAL: usize = EP0_REGION_BYTES + UVC_BULK_DMA_CAP;
+/// EP0 SETUP 包固定落在窗口头部。
+pub(crate) const OFF_EP0: usize = 0;
+/// EP0 小缓冲读（Hub 描述符、配置前缀、`GET_PORT_STATUS`），与 UVC 等时大区错开。
+pub(crate) const DMA_OFF_SMALL_IO: usize = 256;
+
 #[repr(C, align(256))]
 struct DmaBuf {
     bytes: [u8; EP0_REGION_BYTES],
@@ -16,15 +29,6 @@ static mut DMA_BUF: DmaBuf = DmaBuf {
     bytes: [0; EP0_REGION_BYTES],
     uvc_bulk: [0; 384 * 1024],
 };
-
-/// UVC 等时传输使用的 DMA 区起始偏移（紧跟在 1KiB EP0 工作区之后）。
-pub const DMA_OFF_UVC_BULK: usize = EP0_REGION_BYTES;
-/// UVC 视频缓冲容量；前 `UVC_WORK_AREA_BYTES` 用作单微帧 RX 工作区，其余拼接 JPEG。
-/// 720p MJPEG 单帧典型 100-300KB，需要 ≥320KB 的 JPEG 区。
-pub const UVC_BULK_DMA_CAP: usize = 384 * 1024;
-
-/// 整个 `DmaBuf` 大小（供边界检查）。
-const DMA_BUF_TOTAL: usize = EP0_REGION_BYTES + UVC_BULK_DMA_CAP;
 
 /// DMA 工作区基址（`static mut` 仅经裸指针访问，避免 `static_mut_refs`）。
 #[inline]
@@ -38,11 +42,6 @@ pub(crate) fn dma_ptr() -> *mut u8 {
 pub(crate) fn dma_phys(off: usize) -> u32 {
     (dma_ptr() as usize + off) as u32
 }
-
-/// EP0 SETUP 包固定落在窗口头部。
-pub(crate) const OFF_EP0: usize = 0;
-/// EP0 小缓冲读（Hub 描述符、配置前缀、`GET_PORT_STATUS`），与 UVC 等时大区错开。
-pub(crate) const DMA_OFF_SMALL_IO: usize = 256;
 
 /// 安全的只读视图，供 UVC 等解析刚完成的 DMA 数据（**仅**在传输/cache invalidate 之后调用）。
 ///

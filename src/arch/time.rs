@@ -11,6 +11,12 @@ use core::time::Duration;
 /// `rdtime`（mtime）计数频率。SG2002 为 25 MHz——实测 25.005 MHz
 /// （小核连续采样 `rdtime`，300,333,869 ticks / 12.011 s）。
 pub const TIMEBASE_HZ: u64 = 25_000_000;
+/// CLINT mtimecmp（SG2002 CLINT @ 0x7400_0000,标准布局 +0x4000）。
+/// 经 32 位桥,按 RV32 惯用高低字对写,不赌 64-bit 单写能否解码。
+const CLINT_MTIMECMP_LO: usize = 0x7400_4000;
+const CLINT_MTIMECMP_HI: usize = 0x7400_4004;
+/// 心跳周期：10ms。
+const HEARTBEAT_INTERVAL_TICKS: u64 = TIMEBASE_HZ / 100;
 
 /// 读 64 位 `rdtime`（CLINT mtime，M-mode / S-mode 都可读，C906 已验证）。
 ///
@@ -55,13 +61,6 @@ pub fn elapsed_since(t0: u64) -> Duration {
 //
 // 判读：小核完全活 → 心跳持续走；心跳冻结 → 核心/总线级 wedge（mtimer 都进
 // 不来）；心跳走但业务死 → 主循环/特定 IRQ 路径问题。
-
-/// CLINT mtimecmp（SG2002 CLINT @ 0x7400_0000,标准布局 +0x4000）。
-/// 经 32 位桥,按 RV32 惯用高低字对写,不赌 64-bit 单写能否解码。
-const CLINT_MTIMECMP_LO: usize = 0x7400_4000;
-const CLINT_MTIMECMP_HI: usize = 0x7400_4004;
-/// 心跳周期：10ms。
-const HEARTBEAT_INTERVAL_TICKS: u64 = TIMEBASE_HZ / 100;
 
 /// 启动心跳（`trap::init_interrupts` 尾部调用：先装 cmp 再开 MTIE，避免风暴）。
 pub fn init_heartbeat() {
