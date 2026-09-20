@@ -11,6 +11,37 @@ use core::time::Duration;
 use crate::arch::time::{delay, elapsed_since, rdtime};
 use crate::platform::{JPU_REG_BASE, VC_REG_BASE};
 
+// 模块常量
+/// JPU 子系统时钟使能值（TOP+0x2008;Cvitek 厂商 SDK 值,位语义无公开
+/// 文档——0x3300 = 两个 2-bit 字段各 0b11,按家族惯例为时钟源选择+使能,
+/// 仅整值经真机验证:不写则 JPU 不工作,写入后 16.5fps 稳定解码）。
+const CLK_JPEG_ENABLE: u32 = 0x3300;
+
+const JPU_WARMUP_BBC_BASE: u32 = 0x8026_C000;
+
+/// JPEG 像素格式（写入 MCU/DPB 相关寄存器）
+pub const FORMAT_420: u32 = 0;
+pub const FORMAT_422: u32 = 1;
+pub const FORMAT_224: u32 = 2;
+pub const FORMAT_444: u32 = 3;
+pub const FORMAT_400: u32 = 4;
+
+/// DMA 池几何（mem.rs 页位图分配器的容量上界与页大小）。
+pub const STREAM_BUF_SIZE: usize = 0x40000;
+pub const JPU_DRAM_PHYSICAL_SIZE: usize = 0x0010_0000;
+pub const VMEM_PAGE_SIZE: usize = 16 * 1024;
+
+/// 霍夫曼表上传相位/地址（HUFF_CTRL.PHASE 与 HUFF_ADDR 的阶段基址;见 decoder.rs 上传序列）。
+pub const HUFF_PHASE_MIN: u32 = 0x003;
+pub const HUFF_PHASE_MAX: u32 = 0x403;
+pub const HUFF_PHASE_PTR: u32 = 0x803;
+pub const HUFF_PHASE_VAL: u32 = 0xC03;
+pub const HUFF_ADDR_MAX: u32 = 0x440;
+pub const HUFF_ADDR_PTR: u32 = 0x880;
+
+pub const QMAT_PHASE_Y: u32 = 0x03;
+pub const QMAT_PHASE_CB: u32 = 0x43;
+pub const QMAT_PHASE_CR: u32 = 0x83;
 
 register_bitfields![u32,
     /// VC（Video Codec）子块使能寄存器（bit0-4 = 各子块使能）。
@@ -35,19 +66,6 @@ fn enable_vc_subblocks() {
     vc.enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
     let _ = vc.enable.get();
 }
-
-const JPU_WARMUP_BBC_BASE: u32 = 0x8026_C000;
-
-/// JPEG 像素格式（写入 MCU/DPB 相关寄存器）
-pub const FORMAT_420: u32 = 0;
-pub const FORMAT_422: u32 = 1;
-pub const FORMAT_224: u32 = 2;
-pub const FORMAT_444: u32 = 3;
-pub const FORMAT_400: u32 = 4;
-
-pub const STREAM_BUF_SIZE: usize = 0x40000;
-pub const JPU_DRAM_PHYSICAL_SIZE: usize = 0x0010_0000;
-pub const VMEM_PAGE_SIZE: usize = 16 * 1024;
 
 register_bitfields! [
     u32,
@@ -169,13 +187,7 @@ pub fn jpu_regs() -> &'static JpuRegisters {
     unsafe { &*(JPU_REG_BASE as *const JpuRegisters) }
 }
 
-/// TOP JPEG 时钟、复位、DDR remap 与 VC 子块使能，并完成 JPU 软复位。
-/// JPU 子系统时钟使能值（TOP+0x2008;Cvitek 厂商 SDK 值,位语义无公开
-/// 文档——0x3300 = 两个 2-bit 字段各 0b11,按家族惯例为时钟源选择+使能,
-/// 仅整值经真机验证:不写则 JPU 不工作,写入后 16.5fps 稳定解码）。
-const CLK_JPEG_ENABLE: u32 = 0x3300;
-
-/// 设时钟/复位/VC，但**不设 VD_REMAP**。
+/// 设时钟/复位/VC，并完成 JPU 软复位；但**不设 VD_REMAP**。
 /// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr\[39:32\]），
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
 pub fn hardware_init() {
@@ -217,7 +229,6 @@ pub fn hard_reset() {
     enable_vc_subblocks();
 }
 
-#[inline]
 /// 等待软复位完成。按时间设上限（10ms 足够）——次数上限的实际时长取决于主频
 /// 和循环开销，在小核上会长到不可接受，见 [`crate::arch::time`]。
 fn wait_sw_reset_done() {
@@ -246,13 +257,3 @@ pub fn wait_bbc_idle() {
     }
 }
 
-pub const HUFF_PHASE_MIN: u32 = 0x003;
-pub const HUFF_PHASE_MAX: u32 = 0x403;
-pub const HUFF_PHASE_PTR: u32 = 0x803;
-pub const HUFF_PHASE_VAL: u32 = 0xC03;
-pub const HUFF_ADDR_MAX: u32 = 0x440;
-pub const HUFF_ADDR_PTR: u32 = 0x880;
-
-pub const QMAT_PHASE_Y: u32 = 0x03;
-pub const QMAT_PHASE_CB: u32 = 0x43;
-pub const QMAT_PHASE_CR: u32 = 0x83;
