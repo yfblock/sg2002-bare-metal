@@ -12,7 +12,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::JpuDecoder;
-use super::SyncUnsafeCell;
+use core::cell::SyncUnsafeCell;
 use crate::logger;
 use crate::platform::{JPU_POOL_PA, JPU_POOL_SIZE, YUV_BUF_PA, YUV_BUF_SIZE};
 
@@ -41,7 +41,7 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
 /// 成功返回 `(width, height, yuv_len)`。失败时 JPU 已被复位重建，返回 `Err`；
 /// 调用方应跳过本帧 YUV（只通知 MJPEG），下一帧重试。
 pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> {
-    let cell = unsafe { &mut *DECODER.0.get() };
+    let cell = unsafe { &mut *DECODER.get() };
     if cell.is_none() {
         match create_decoder() {
             Ok(new_decoder) => {

@@ -1,0 +1,5 @@
+[toolchain]
+# 固定 nightly:启用 unstable `sync_unsafe_cell`(core::cell::SyncUnsafeCell 替代本地包装)。
+# 按日期钉死保证固件构建可复现;升级前需 `make test` 回归。
+channel = "nightly-2026-09-19"
+profile = "minimal"

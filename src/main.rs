@@ -28,6 +28,7 @@
 //!     └── ive/      IVE 硬件 CSC(未跑通,保留)
 //! ```
 
+#![feature(sync_unsafe_cell)] // core::cell::SyncUnsafeCell(nightly 钉死于 rust-toolchain.toml)
 #![no_std]
 #![recursion_limit = "512"]
 #![no_main]

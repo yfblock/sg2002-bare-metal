@@ -2,7 +2,7 @@
 //!
 //! 在静态对齐缓冲上实现 16 KiB 页位图分配；所有 `unsafe` 集中在本模块。
 
-use super::SyncUnsafeCell;
+use core::cell::SyncUnsafeCell;
 use super::regs::{JPU_DRAM_PHYSICAL_SIZE, VMEM_PAGE_SIZE};
 
 /// 由 JPU 内存池分配的物理地址区间。
@@ -111,18 +111,24 @@ static MEM_STATE: SyncUnsafeCell<JpuMemoryPool> = SyncUnsafeCell::new(JpuMemoryP
 /// 且 JPU DMA 引擎能正确访问该地址范围。
 pub unsafe fn init_jpu_memory_with(base: usize, size: usize) {
     // 未 init 时 num_pages=0,alloc 自然返回 None;重复 init 见 pool.init 注释。
-    MEM_STATE.with_mut(|pool| pool.init(base, size.min(JPU_DRAM_PHYSICAL_SIZE)));
+    // SAFETY: 裸机单核上下文,池状态仅主循环访问。
+    let pool = unsafe { &mut *MEM_STATE.get() };
+    pool.init(base, size.min(JPU_DRAM_PHYSICAL_SIZE));
 }
 
 pub fn jpu_alloc(size: usize) -> Option<PhysBuffer> {
-    MEM_STATE.with_mut(|pool| pool.alloc(size))
+    // SAFETY: 同上。
+    let pool = unsafe { &mut *MEM_STATE.get() };
+    pool.alloc(size)
 }
 
 pub fn jpu_free(buf: PhysBuffer) {
     if buf.is_empty() {
         return;
     }
-    MEM_STATE.with_mut(|pool| pool.free(buf));
+    // SAFETY: 同上。
+    let pool = unsafe { &mut *MEM_STATE.get() };
+    pool.free(buf);
 }
 
 /// 将 JPEG bitstream 拷贝到已分配的 stream 物理缓冲。
