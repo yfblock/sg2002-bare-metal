@@ -19,19 +19,13 @@ use crate::drivers::usb;
 #[allow(unused_imports)]
 use tock_registers::registers::ReadWrite;
 use super::regs::{
-    Dwc2Regs, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
+    GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
     GUSBCFG, HCFG, HPRT0,
 };
 
-/// 返回 DWC2 寄存器视图（基址为编译期常量，恒有效）。
-#[inline]
-fn regs() -> &'static Dwc2Regs {
-    usb::dwc2_regs()
-}
-
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
 fn dbg_dwc2_init_timeout(phase: &'static str) {
-    let r = regs();
+    let r = usb::dwc2_regs();
     let grst = r.grstctl.get();
     let gint = r.gintsts.get();
     let gahb = r.gahbcfg.get();
@@ -61,7 +55,7 @@ fn spin_delay(iterations: u32) {
 }
 
 fn wait_ahb_idle() -> UsbResult<()> {
-    let r = regs();
+    let r = usb::dwc2_regs();
     for _ in 0..3_000_000u32 {
         if r.grstctl.is_set(GRSTCTL::AHBIDLE) {
             return Ok(());
@@ -74,7 +68,7 @@ fn wait_ahb_idle() -> UsbResult<()> {
 
 fn core_soft_reset() -> UsbResult<()> {
     wait_ahb_idle()?;
-    let r = regs();
+    let r = usb::dwc2_regs();
     let snpsid = r.gsnpsid.get();
     let core_rev = snpsid & DWC2_CORE_REV_MASK;
     let new_rst_seq = core_rev >= (DWC2_CORE_REV_4_20A & DWC2_CORE_REV_MASK);
@@ -108,7 +102,7 @@ fn core_soft_reset() -> UsbResult<()> {
 }
 
 fn force_host_mode() -> UsbResult<()> {
-    let r = regs();
+    let r = usb::dwc2_regs();
     r.gusbcfg.modify(GUSBCFG::FORCEHOSTMODE::SET);
     spin_delay(100_000);
     for _ in 0..500_000u32 {
@@ -123,7 +117,7 @@ fn force_host_mode() -> UsbResult<()> {
 /// 取根端口寄存器视图（HPRT0）。
 #[inline]
 pub fn hprt0() -> &'static ReadWrite<u32, HPRT0::Register> {
-    &regs().hprt0
+    &usb::dwc2_regs().hprt0
 }
 
 /// 设/清 HPRT0 的 `PWR` 与 `RST`（本驱动仅需写这两个普通字段）。
@@ -133,7 +127,7 @@ pub fn hprt0() -> &'static ReadWrite<u32, HPRT0::Register> {
 ///    "禁用/清除"，不清掉会误禁用端口（[`HPRT0_W1C_MASK`]）；
 /// 2. 清掉目标字段位——否则 `rst=false` 这种 CLEAR 语义写不进去。
 fn hprt0_port(pwr: bool, rst: bool) {
-    regs().hprt0.modify(
+    usb::dwc2_regs().hprt0.modify(
         HPRT0::PWR.val(pwr as u32)
             + HPRT0::RST.val(rst as u32)
             // W1C 位显式加入并置 0:modify() 的 RMW 会把它们从读回值中清掉
@@ -179,7 +173,7 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
 // --- CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）---
 
 fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
-    let r = regs();
+    let r = usb::dwc2_regs();
     for _ in 0..3_000_000u32 {
         let on = r.grstctl.is_set(field);
         if on == set {
@@ -195,7 +189,7 @@ fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Reg
 
 fn flush_rx_fifo_host() -> UsbResult<()> {
     wait_ahb_idle()?;
-    regs().grstctl.write(GRSTCTL::RXFFLSH::SET);
+    usb::dwc2_regs().grstctl.write(GRSTCTL::RXFFLSH::SET);
     wait_grstctl_handshake(GRSTCTL::RXFFLSH, false)?;
     spin_delay(2_000);
     Ok(())
@@ -203,7 +197,7 @@ fn flush_rx_fifo_host() -> UsbResult<()> {
 
 fn flush_tx_fifo_host_all() -> UsbResult<()> {
     wait_ahb_idle()?;
-    regs()
+    usb::dwc2_regs()
         .grstctl
         .write(GRSTCTL::TXFFLSH::SET + GRSTCTL::TXFNUM.val(0x10));
     wait_grstctl_handshake(GRSTCTL::TXFFLSH, false)?;
@@ -214,7 +208,7 @@ fn flush_tx_fifo_host_all() -> UsbResult<()> {
 /// 动态 FIFO：优先采用设备树常用值；超出 `GHWCFG3.DFIFO_DEPTH` 总深度时按
 /// Linux `dwc2_calculate_dynamic_fifo` 收缩（主机通道数 = 1 + `GHWCFG2.NUM_HOST_CHAN`）。
 fn init_host_fifos_cv182x() -> UsbResult<()> {
-    let r = regs();
+    let r = usb::dwc2_regs();
     let total = r.ghwcfg3.read(GHWCFG3::DFIFO_DEPTH);
     let hc = 1 + r.ghwcfg2.read(GHWCFG2::NUM_HOST_CHAN);
     let mut rx: u32 = 536;
@@ -231,7 +225,7 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
         ptx = total.saturating_sub(rx).saturating_sub(nptx);
     }
 
-    let r = regs();
+    let r = usb::dwc2_regs();
     r.grxfsiz.write(GRXFSIZ::RXFDEP.val(rx));
     r.gnptxfsiz
         .write(GNPTXFSIZ::NPTXFDEP.val(nptx) + GNPTXFSIZ::NPTXFSTADDR.val(rx));
@@ -250,7 +244,7 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
 
 /// `dr_mode=otg` 时常用：使能 override 并置位 A-session / VBUS valid，否则根口可能无电气活动。
 fn init_gotgctl_otg_host_session_overrides() {
-    regs().gotgctl.modify(
+    usb::dwc2_regs().gotgctl.modify(
         GOTGCTL::DBNCE_FLTR_BYPASS::SET
             + GOTGCTL::AVALOEN::SET
             + GOTGCTL::AVALOVAL::SET
@@ -269,7 +263,7 @@ fn init_gotgctl_otg_host_session_overrides() {
 /// **必须** 把 PHYIF16 清零，否则 DWC2 与 PHY 的 UTMI 总线宽度不匹配，
 /// chirp K/J 信号无法被正确解码，HPRT0.SPD 永远停在 FS。
 fn init_gusbcfg_cv182x_utmi16_hs() {
-    let r = regs();
+    let r = usb::dwc2_regs();
     let utmi_w = r.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
     let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
     log::debug!("USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
@@ -286,7 +280,7 @@ fn init_gusbcfg_cv182x_utmi16_hs() {
 }
 
 fn init_gahb_dma_cv182x() {
-    let r = regs();
+    let r = usb::dwc2_regs();
     let arch = r.ghwcfg2.read(GHWCFG2::ARCH);
     r.gahbcfg.modify(
         GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET,
@@ -319,7 +313,7 @@ fn cv182x_usb2_phy_host_clear_utmi_override() {
 ///
 /// 成功返回 Ok，不保证已有设备连接；请读 [`dwc2_hprt0_read`] 的 `CONNSTS`。
 pub fn dwc2_host_init() -> UsbResult<()> {
-    let r = regs();
+    let r = usb::dwc2_regs();
     r.gintmsk.set(0);
     r.gintsts.set(0xFFFF_FFFF);
 
