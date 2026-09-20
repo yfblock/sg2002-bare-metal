@@ -112,6 +112,8 @@ pub const HUB_PORT_FEATURE_C_RESET: u16 = 20;
 pub const USB_DT_CONFIGURATION: u8 = 2;
 /// Hub 类描述符类型（`GET_DESCRIPTOR` 高字节）。
 pub const USB_DT_HUB: u8 = 0x29;
+/// 接口类：Video。
+pub const USB_CLASS_VIDEO: u8 = 0x0e;
 
 /// 构造 `GET_DESCRIPTOR(Configuration)` — 对**已分配地址**的设备使用。
 ///

@@ -14,8 +14,7 @@
 //! │   ├── trap      M-mode trap 入口/分发 + mtvec/mie 初始化
 //! │   ├── plic      PLIC 中断控制器(M-mode ctx)
 //! │   ├── cache     D-cache 维护(DMA 一致性)
-//! │   ├── time      rdtime/delay(Duration)/elapsed_since(25MHz timebase)
-//! │   └── sync      fence/wfi 原语
+//! │   └── time      rdtime/delay(Duration)/elapsed_since(25MHz timebase)
 //! ├── ipc.rs        大小核通信协议(DRAM 邮箱 ABI/帧通知/B2S 消息处理/pause-mute)
 //! ├── platform/     板级(SG2002):跨核 UART 控制台(打印+Dekker 行锁)、USB 平台初始化
 //! │   ├── uart      DW8250 寄存器访问 + 打印辅助 + 跨核行锁
@@ -36,7 +35,6 @@
 #![no_std]
 #![recursion_limit = "512"]
 #![no_main]
-#![allow(static_mut_refs)]
 
 // ---- 架构层(RV64 M-mode) ----
 mod arch;
@@ -75,8 +73,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
     uvc::set_preferred_max_pixels(640 * 480);
     uvc::set_preferred_frame_interval(333_333);
 
-    let extras = enumerate_topology_only().expect("enum");
-    let cam = extras.uvc.expect("no UVC camera");
+    let cam = enumerate_topology_only().expect("enum");
     let ep0 = Ep0::new(u32::from(cam.addr), cam.ep0_mps);
 
     let cfg_buf = uvc::read_configuration_descriptor(&ep0, 1).expect("read cfg");

@@ -2,7 +2,6 @@
 //!
 //! 在静态对齐缓冲上实现 16 KiB 页位图分配；所有 `unsafe` 集中在本模块。
 
-use core::cell::UnsafeCell;
 
 use super::regs::{JPU_DRAM_PHYSICAL_SIZE, VMEM_PAGE_SIZE};
 
@@ -96,20 +95,7 @@ impl JpuMemoryPool {
     }
 }
 
-struct SyncUnsafeCell<T>(UnsafeCell<T>);
-// 裸机单核环境：JPU 驱动仅在 bring-up 线程中使用静态池。
-unsafe impl<T> Sync for SyncUnsafeCell<T> {}
-
-impl<T> SyncUnsafeCell<T> {
-    const fn new(value: T) -> Self {
-        Self(UnsafeCell::new(value))
-    }
-
-    fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        // SAFETY: 单核裸机上下文，无并发访问静态池。
-        unsafe { f(&mut *self.0.get()) }
-    }
-}
+use super::SyncUnsafeCell;
 
 struct JpuMemState {
     pool: JpuMemoryPool,

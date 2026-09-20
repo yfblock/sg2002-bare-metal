@@ -10,7 +10,6 @@ use super::prefs::{
     PREFERRED_FRAME_H, PREFERRED_FRAME_INTERVAL, PREFERRED_FRAME_W, PREFERRED_MAX_PIXELS,
 };
 
-const USB_DT_CONFIGURATION: u8 = 2;
 const USB_DT_INTERFACE: u8 = 4;
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
@@ -20,7 +19,6 @@ const VS_FRAME_MJPEG: u8 = 0x07;
 const VS_FORMAT_UNCOMPRESSED: u8 = 0x04;
 const VS_FRAME_UNCOMPRESSED: u8 = 0x05;
 
-const USB_CLASS_VIDEO: u8 = 0x0e;
 const USB_SUBCLASS_VIDEO_STREAMING: u8 = 0x02;
 const USB_SUBCLASS_VIDEO_CONTROL: u8 = 0x01;
 
@@ -124,7 +122,7 @@ fn choose_frame_interval(
 pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
     ep.read(setup::get_descriptor_configuration(cfg_index, 9), &mut hdr)?;
-    if hdr[1] != USB_DT_CONFIGURATION {
+    if hdr[1] != setup::USB_DT_CONFIGURATION {
         return Err(UsbError::Protocol("not a configuration descriptor"));
     }
     let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
@@ -182,7 +180,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
             cur_ifc_class = cfg[i + 5];
             cur_ifc_sub = cfg[i + 6];
         } else if ty == CS_INTERFACE
-            && cur_ifc_class == USB_CLASS_VIDEO
+            && cur_ifc_class == setup::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
             let st = cfg.get(i + 2).copied().unwrap_or(0);
@@ -303,14 +301,14 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 }
             }
         } else if ty == USB_DT_ENDPOINT
-            && cur_ifc_class == USB_CLASS_VIDEO
+            && cur_ifc_class == setup::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
             let ep_addr = cfg[i + 2];
             let attr = cfg[i + 3];
             let mps_raw = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
-            let mps = mps_raw & 0x7FF;
-            let mult = ((mps_raw >> 11) & 0x3) + 1;
+            let mps = dwc2::wmax_mps(mps_raw);
+            let mult = dwc2::wmax_mult(mps_raw);
             let xfer = attr & 0x03;
             if (ep_addr & 0x80) == 0 {
                 i += bl;
@@ -328,8 +326,8 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 best_isoch = Some(match best_isoch {
                     None => tak,
                     Some(b) => {
-                        let old_mps = b.2 & 0x7FF;
-                        let old_mult = ((b.2 >> 11) & 0x3) + 1;
+                        let old_mps = dwc2::wmax_mps(b.2);
+                        let old_mult = dwc2::wmax_mult(b.2);
                         let new_score = if new_mult == 1 {
                             10_000_000u32 + u32::from(mps)
                         } else {
@@ -412,8 +410,8 @@ pub(crate) fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
     // mult=1 最大带宽，仍选最大 alt，摄像头会自适应降低每微帧吞吐（帧传输
     // 耗时更长但数据正确）。
     for &(alt, mps_raw) in alts {
-        let mps = u32::from(mps_raw & 0x7FF);
-        let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
+        let mps = dwc2::wmax_mps(mps_raw);
+        let mult = dwc2::wmax_mult(mps_raw);
         if mult > 1 {
             continue;
         }
@@ -439,7 +437,7 @@ pub(crate) fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
     if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
         log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
             sel.alt_setting, sel.mps_raw,
-            u32::from(sel.mps_raw & 0x7FF) * (u32::from((sel.mps_raw >> 11) & 0x3) + 1),
+            dwc2::wmax_payload_per_uframe(sel.mps_raw),
             new_alt, new_mps_raw, new_total, need);
         sel.alt_setting = new_alt;
         sel.mps_raw = new_mps_raw;
@@ -491,12 +489,12 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
             cur_ifc_num = cfg[i + 2];
             cur_ifc_class = cfg[i + 5];
             cur_ifc_sub = cfg[i + 6];
-            if cur_ifc_class == USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
+            if cur_ifc_class == setup::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
                 out.vc_interface = cur_ifc_num;
                 found_vc = true;
             }
         } else if ty == CS_INTERFACE
-            && cur_ifc_class == USB_CLASS_VIDEO
+            && cur_ifc_class == setup::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL
             && bl >= 3
         {

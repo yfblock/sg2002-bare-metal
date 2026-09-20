@@ -9,13 +9,14 @@ use super::descriptor::UvcControlEntities;
 use super::setup::{uvc_get_cur_vc, uvc_get_def_vc, uvc_set_cur_vc};
 
 // ProcessingUnit selectors (wValue MSB)
-#[allow(dead_code)] const PU_BACKLIGHT_COMPENSATION: u8 = 0x01;
-#[allow(dead_code)] const PU_BRIGHTNESS_CONTROL: u8 = 0x02;
-#[allow(dead_code)] const PU_CONTRAST_CONTROL: u8 = 0x03;
-#[allow(dead_code)] const PU_GAIN_CONTROL: u8 = 0x04;
-#[allow(dead_code)] const PU_HUE_CONTROL: u8 = 0x06;
-#[allow(dead_code)] const PU_SATURATION_CONTROL: u8 = 0x07;
-#[allow(dead_code)] const PU_SHARPNESS_CONTROL: u8 = 0x08;
+const PU_BACKLIGHT_COMPENSATION: u8 = 0x01;
+const PU_BRIGHTNESS_CONTROL: u8 = 0x02;
+const PU_CONTRAST_CONTROL: u8 = 0x03;
+const PU_GAIN_CONTROL: u8 = 0x04;
+const PU_HUE_CONTROL: u8 = 0x06;
+const PU_SATURATION_CONTROL: u8 = 0x07;
+const PU_SHARPNESS_CONTROL: u8 = 0x08;
+const PU_GAMMA_CONTROL: u8 = 0x09;
 const PU_WHITE_BALANCE_TEMPERATURE_CONTROL: u8 = 0x0A;
 const PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL: u8 = 0x0B;
 const PU_HUE_AUTO_CONTROL: u8 = 0x10;
@@ -24,7 +25,7 @@ const PU_POWER_LINE_FREQUENCY_CONTROL: u8 = 0x05;
 // CameraTerminal selectors
 const CT_AE_MODE_CONTROL: u8 = 0x02;
 const CT_AE_PRIORITY_CONTROL: u8 = 0x03;
-#[allow(dead_code)] const CT_EXPOSURE_TIME_ABSOLUTE_CONTROL: u8 = 0x04;
+const CT_EXPOSURE_TIME_ABSOLUTE_CONTROL: u8 = 0x04;
 const CT_FOCUS_AUTO_CONTROL: u8 = 0x08;
 
 /// 仅在控制传输出现 STALL 时返回 false，其它错误则当成"不支持"忽略。
@@ -40,7 +41,6 @@ fn try_set_cur_u8(
     ep.write(setup, &buf).is_ok()
 }
 
-#[allow(dead_code)]
 fn try_get_cur_u8(
     ep: &dwc2::Ep0,
     vc_if: u8,
@@ -56,7 +56,6 @@ fn try_get_cur_u8(
     }
 }
 
-#[allow(dead_code)]
 fn try_get_cur_u16(
     ep: &dwc2::Ep0,
     vc_if: u8,
@@ -239,7 +238,7 @@ pub fn uvc_init_camera_controls(
         pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 3, selector: PU_SATURATION_CONTROL, width: 2, name: "Saturation", override_val: tune.saturation });
         pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 4, selector: PU_SHARPNESS_CONTROL, width: 2, name: "Sharpness", override_val: tune.sharpness });
         // PU_GAMMA selector = 0x09
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 5, selector: 0x09, width: 2, name: "Gamma", override_val: tune.gamma });
+        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 5, selector: PU_GAMMA_CONTROL, width: 2, name: "Gamma", override_val: tune.gamma });
         pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 8, selector: PU_BACKLIGHT_COMPENSATION, width: 2, name: "Backlight", override_val: tune.backlight });
         pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 9, selector: PU_GAIN_CONTROL, width: 2, name: "Gain", override_val: tune.gain });
 

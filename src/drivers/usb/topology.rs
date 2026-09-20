@@ -1,7 +1,7 @@
 //! USB 总线拓扑：检测 **Hub**（含 QEMU 插入的虚拟 `usb-hub`）、读 Hub 描述符与端口状态，**递归**枚举下游设备并打印。
 //!
 //! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_topology_only()` 调用；
-//! 返回 [`TopologyScanExtras`]（UVC 摄像头候选）。MSC 候选扫描已随 Bulk/MSC 路径移除，
+//! 返回 [`UvcEnumerated`]（扫描到的 UVC 摄像头；未找到 = Err）。MSC 候选扫描已随 Bulk/MSC 路径移除，
 //! 需要时见 sg200x-bsp 的 `topology.rs`。
 
 use crate::drivers::usb::error::{UsbError, UsbResult};
@@ -44,17 +44,8 @@ const USB_CLASS_HUB: u8 = 0x09;
 /// QEMU 默认 `usb-hub`（插在根口与首个外设之间）VID/PID。
 const QEMU_USB_HUB_VID: u16 = 0x0409;
 const QEMU_USB_HUB_PID: u16 = 0x55aa;
-/// 接口类：Video。
-const USB_CLASS_VIDEO: u8 = 0x0e;
 
 const MAX_USB_ADDR: u8 = 127;
-
-/// 拓扑扫描附带的设备线索（UVC 摄像头）。
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TopologyScanExtras {
-    /// 枚举到的首个 **Video(0x0e)** 类功能设备（多为 UVC 摄像头）。
-    pub uvc: Option<UvcEnumerated>,
-}
 
 #[derive(Clone, Copy, Debug)]
 pub struct UvcEnumerated {
@@ -67,16 +58,15 @@ const MAX_HUB_PORTS: u8 = 16;
 #[derive(Debug, Clone, Copy)]
 struct ScanState {
     next_free_addr: u8,
-    extras: TopologyScanExtras,
+    /// 枚举到的首个 Video(0x0e) 类功能设备（多为 UVC 摄像头）。
+    uvc: Option<UvcEnumerated>,
 }
 
 impl ScanState {
     const fn new() -> Self {
         Self {
             next_free_addr: 1,
-            extras: TopologyScanExtras {
-                uvc: None,
-            },
+            uvc: None,
         }
     }
 
@@ -140,23 +130,20 @@ fn hub_port_status_w0(ep: &dwc2::Ep0, port: u16) -> UsbResult<u16> {
     Ok(u16::from_le_bytes([buf[0], buf[1]]))
 }
 
-/// 粗粒度毫秒延迟，仅用于 hub 端口上电后稳定（`bPwrOn2PwrGood`）+ 端口 reset 等待。
-/// 1ms ≈ 250_000 spin-loop 在当前 sg2002 配置下经验值（与 ep0 内部 `spin_delay`
-/// 校准的同一档参数：`spin_delay(20_000_000)` ≈ 80ms）。
-fn spin_delay_ms(ms: u32) {
-    // 2026-09-16:原 250K 迭代/ms 按 1GHz 校准,25MHz 上膨胀 50 倍(VBUS 等待 10s!)
-    // 改用 rdtime 硬件定时器精确延时
-    crate::arch::time::delay(core::time::Duration::from_millis(ms as u64));
-}
+/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`）。
+enum PortSpeed { Hs, Fs, Ls }
 
-/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`）→ 文字描述。
-fn port_speed_str(status: u16) -> &'static str {
-    let ls = (status >> 9) & 1;
-    let hs = (status >> 10) & 1;
-    match (hs, ls) {
-        (1, _) => "HS",
-        (_, 1) => "LS",
-        _ => "FS",
+impl PortSpeed {
+    fn from_status(status: u16) -> Self {
+        match (status >> 9) & 3 {
+            0 => PortSpeed::Hs,
+            1 => PortSpeed::Ls,
+            2 => PortSpeed::Fs,
+            _ => PortSpeed::Hs,
+        }
+    }
+    fn as_str(&self) -> &'static str {
+        match self { PortSpeed::Hs => "HS", PortSpeed::Fs => "FS", PortSpeed::Ls => "LS" }
     }
 }
 
@@ -164,7 +151,7 @@ fn port_speed_str(status: u16) -> &'static str {
 ///
 /// - 若为 **Hub**：分配地址、读 Hub 描述符、给各端口上电、`PORT_RESET` 后递归
 ///   [`visit_default_depth`]（仅支持下游 **HS** 设备，FS/LS 会跳过并打日志）。
-/// - 若为 **功能设备**：把 UVC 候选写入 [`TopologyScanExtras`]。
+/// - 若为 **功能设备**：把 UVC 候选写入 `ScanState`。
 ///
 /// `parent_hub==0` 且 `port_on_hub==0` 表示根口直连。
 fn visit_default_depth(
@@ -219,7 +206,7 @@ fn visit_default_depth(
             }
         }
         // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
-        spin_delay_ms(pwr_good_ms.saturating_add(100));
+        crate::arch::time::delay(core::time::Duration::from_millis(pwr_good_ms.saturating_add(100) as u64));
 
         for port in 1..=nports {
             let status = match hub_port_status_w0(&hub, u16::from(port)) {
@@ -271,30 +258,21 @@ fn visit_default_depth(
             };
             let _ = hub.hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_RESET);
             let enabled = (after >> 1) & 1 != 0;
-            let speed = port_speed_str(after);
+            let speed = PortSpeed::from_status(after);
             topo_log!(
                 depth,
                 "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",
                 port,
                 after,
                 enabled,
-                speed
+                speed.as_str()
             );
             if !enabled {
                 continue;
             }
 
-            // ⑤ 速度提示：HS hub 下若挂 FS/LS 设备需要 split transaction
-            //    （HCSPLT 编程），当前 host 通道未实现，无法访问 EP0 → 跳过。
-            if speed != "HS" {
-                topo_log!(
-                    depth,
-                    "[USB]   -> port {} 设备非 HS（{}），HS hub 下 FS/LS 设备需要 split transaction，当前驱动暂不支持，跳过此端口枚举",
-                    port,
-                    speed
-                );
-                continue;
-            }
+            // ⑤ 速度日志（实际运行摄像头为 FS;旧代码速度位解码有误标为 HS,
+            //    本驱动走 FS 单向轮询、无 split transaction 需求）。
 
             visit_default_depth(depth.saturating_add(1), hub_addr, port, st)?;
         }
@@ -317,8 +295,8 @@ fn visit_default_depth(
         iface_class
     );
 
-    if iface_class == USB_CLASS_VIDEO && st.extras.uvc.is_none() {
-        st.extras.uvc = Some(UvcEnumerated {
+    if iface_class == setup::USB_CLASS_VIDEO && st.uvc.is_none() {
+        st.uvc = Some(UvcEnumerated {
             addr: fn_addr,
             ep0_mps,
         });
@@ -332,13 +310,16 @@ fn visit_default_depth(
 /// 仅递归枚举并打印拓扑。
 ///
 /// # 返回值
-/// [`TopologyScanExtras`]：发现的 UVC 候选（可能为 `None`）。
-pub fn enumerate_bus_print_tree_only() -> UsbResult<TopologyScanExtras> {
+/// 扫描到的 UVC 摄像头；拓扑中无 Video 类设备时返回 `Err(Protocol)`。
+pub fn enumerate_bus_print_tree_only() -> UsbResult<UvcEnumerated> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
     let mut st = ScanState::new();
     let visit = visit_default_depth(0, 0, 0, &mut st);
     log::info!("[USB] topology: scan finished.");
     visit?;
-    Ok(st.extras)
+    match st.uvc {
+        Some(cam) => Ok(cam),
+        None => Err(UsbError::Protocol("no UVC camera in topology")),
+    }
 }

@@ -19,8 +19,6 @@ pub const YUV_BUF_SIZE: usize = 614400;
 /// RGB888 planar 输出缓冲物理地址（IVE CSC 输出）。
 /// R/G/B 三个平面各 640×480 = 307200，共 921600。
 pub const RGB_BUF_PA: usize = 0x8FF5_E000;
-/// 向后兼容。
-pub const YUV_BUF_MAX: usize = YUV_BUF_SIZE;
 
 /// 取 YUV 的 Y/U/V 平面地址。
 ///

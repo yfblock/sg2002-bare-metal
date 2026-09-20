@@ -20,11 +20,9 @@
 //!   (gap)     [0x8FFE0000, 0x90040000) 64K
 //!   mailbox   [0x90040000, 0x8FFFE020) 32B
 
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use crate::drivers::jpu::{JpuDecoder, regs::{JPU_REG_BASE, VC_REG_BASE}};
-use crate::drivers::soc::TOP_BASE;
+use crate::drivers::jpu::JpuDecoder;
 
 use crate::platform::uart;
 use crate::yuv_buf;
@@ -34,29 +32,12 @@ use crate::yuv_buf;
 const JPU_POOL_PA: usize = 0x8FF1_E000;
 const JPU_POOL_SIZE: usize = 0x0004_0000; // 256KB
 
-/// 裸机单核：JPU 仅在主循环访问，邮箱 ISR 不触碰 JPU。用 `UnsafeCell` 持有单例。
-struct SyncUnsafeCell<T>(UnsafeCell<T>);
-unsafe impl<T> Sync for SyncUnsafeCell<T> {}
-
-impl<T> SyncUnsafeCell<T> {
-    const fn new(value: T) -> Self {
-        Self(UnsafeCell::new(value))
-    }
-}
+use crate::drivers::jpu::SyncUnsafeCell;
 
 static DECODER: SyncUnsafeCell<Option<JpuDecoder>> = SyncUnsafeCell::new(None);
 
 /// JPU 复位次数（wedge 自恢复计数），供日志节流与压力测试观测。
 static RESET_COUNT: AtomicU32 = AtomicU32::new(0);
-
-/// `write_yuv`（把 JPU 输出搬到共享缓冲）的累计耗时，ticks。
-static WRITE_TICKS: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(0);
-
-/// 取走并清零 `write_yuv` 累计耗时。
-pub fn take_write_ticks() -> u64 {
-    WRITE_TICKS.swap(0, Ordering::Relaxed)
-}
 
 /// 创建一个新 decoder（首次调用 + wedge 恢复时用）。
 fn create_decoder() -> Result<JpuDecoder, &'static str> {
@@ -64,9 +45,6 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
     // 可达，32 位地址不需 VD_REMAP）；JPU/TOP/VC 为物理 MMIO 基址，identity 下直访。
     unsafe {
         let mut d = JpuDecoder::new_at_no_vd_remap_with_pool(
-            JPU_REG_BASE,
-            TOP_BASE,
-            VC_REG_BASE,
             JPU_POOL_PA,
             JPU_POOL_SIZE,
         )?;

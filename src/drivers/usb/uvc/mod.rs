@@ -18,25 +18,9 @@ pub mod control;
 pub mod stream;
 pub mod capture;
 
-// 重导出保持完整 `usb::uvc::X` 公开 API。bin crate 里未被本 crate
-// 使用会报 unused_imports（如 uvc_session 会话层专用项），与 dwc2/mod.rs 的
-// 重导出同构，这里统一豁免。
-#[allow(unused_imports)]
-pub use capture::{
-    reset_frame_continuity, take_frame_bytes, uvc_capture_one_frame, LAST_EOF_FID,
-    UVC_ASSEMBLED_JPEG_DMA_OFF, UVC_WORK_AREA_BYTES,
-};
+// 重导出仅保留跨模块消费项（uvc/ 之外经 `uvc::X` 路径使用的）。
+pub use capture::{take_frame_bytes, uvc_capture_one_frame, UVC_ASSEMBLED_JPEG_DMA_OFF};
 pub use control::{uvc_init_camera_controls, UvcImageTuning};
-#[allow(unused_imports)]
-pub use descriptor::{
-    parse_uvc_control_entities, parse_uvc_video_stream, read_configuration_descriptor,
-    UvcControlEntities, UvcStreamSelection,
-};
-#[allow(unused_imports)]
-pub use prefs::{
-    set_preferred_frame_interval, set_preferred_frame_size, set_preferred_max_pixels,
-    FRAME_DEBUG, PREFERRED_FRAME_H, PREFERRED_FRAME_INTERVAL, PREFERRED_FRAME_W,
-    PREFERRED_MAX_PIXELS,
-};
-#[allow(unused_imports)]
+pub use descriptor::{parse_uvc_control_entities, parse_uvc_video_stream, read_configuration_descriptor, UvcStreamSelection};
+pub use prefs::{set_preferred_frame_interval, set_preferred_frame_size, set_preferred_max_pixels};
 pub use stream::uvc_start_video_stream;

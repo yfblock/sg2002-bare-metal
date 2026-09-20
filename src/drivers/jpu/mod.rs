@@ -10,28 +10,29 @@ pub mod regs;
 
 pub use decoder::JpuDecoder;
 
+/// `UnsafeCell` + `Sync`：裸机单核安全持有可变全局。
+pub(crate) struct SyncUnsafeCell<T>(pub(crate) core::cell::UnsafeCell<T>);
+unsafe impl<T> Sync for SyncUnsafeCell<T> {}
+impl<T> SyncUnsafeCell<T> {
+    pub(crate) const fn new(value: T) -> Self { Self(core::cell::UnsafeCell::new(value)) }
+
+    pub(crate) fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        // SAFETY: 裸机单核上下文,无并发访问。
+        unsafe { f(&mut *self.0.get()) }
+    }
+}
+
 /// 解码分步计时：`decode()` 每走一步累计耗时（ticks），由 [FPS] 报告输出。
 pub mod trace {
     use core::sync::atomic::Ordering;
 
-    /// 步号：见 `decoder::decode()` 里的调用点。
+    /// 步号（仅保留 [FPS] 报告实际读取的 5 步）。
     pub mod step {
-        pub const ENTER: u32 = 1;
-        pub const PARSE_HEADER: u32 = 2;
         pub const COPY_STREAM: u32 = 3;
         pub const CLEAN_STREAM: u32 = 4;
-        pub const FRAME_LAYOUT: u32 = 5;
-        pub const FREE_FRAME: u32 = 6;
-        pub const ALLOC_FRAME: u32 = 7;
         pub const INV_FRAME: u32 = 8;
-        pub const CFG_STREAM_REGS: u32 = 9;
-        pub const HUFF: u32 = 10;
-        pub const QUANT: u32 = 11;
-        pub const GRAM: u32 = 12;
-        pub const START_DECODE: u32 = 13;
         pub const POLL: u32 = 14;
         pub const INV_AFTER: u32 = 15;
-        pub const DONE: u32 = 16;
     }
 
     /// 各步累计耗时（rdtime ticks），下标见 `step`。只累加不打印。

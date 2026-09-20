@@ -12,6 +12,24 @@ use super::ch::{
 use super::regs::{HCCHAR, HCTSIZ};
 use super::dma::{dma_phys, dma_ptr, UVC_BULK_DMA_CAP};
 
+/// `wMaxPacketSize` 原始值 → 低 11 位（每事务最大字节数）。
+#[inline]
+pub fn wmax_mps(mps_raw: u16) -> u32 {
+    u32::from(mps_raw & 0x7FF)
+}
+
+/// `wMaxPacketSize` 原始值 → mult（高带宽事务数，1..=3）。
+#[inline]
+pub fn wmax_mult(mps_raw: u16) -> u32 {
+    (u32::from((mps_raw >> 11) & 0x3)) + 1
+}
+
+/// 每微帧总吞吐 = mps × mult。
+#[inline]
+pub fn wmax_payload_per_uframe(mps_raw: u16) -> u32 {
+    wmax_mps(mps_raw).saturating_mul(wmax_mult(mps_raw))
+}
+
 /// 等时（Isochronous）IN 视频端点句柄：绑定设备地址 / 端点号 / `wMaxPacketSize`。
 #[derive(Clone, Copy)]
 pub struct IsochInEp {
@@ -45,8 +63,8 @@ impl IsochInEp {
     /// - `dma_off`：本微帧接收缓冲在内部 DMA 窗口中的起始偏移。
     pub fn read_uframe(&self, dma_off: usize) -> UsbResult<usize> {
         let (dev, ep, mps_raw) = (self.dev, self.ep_num, self.mps_raw);
-        let mps = u32::from(mps_raw & 0x7ff);
-        let mult = u32::from((mps_raw >> 11) & 0x3) + 1;
+        let mps = wmax_mps(mps_raw);
+        let mult = wmax_mult(mps_raw);
         if mps == 0 || mult == 0 || mult > 3 {
             return Err(UsbError::Protocol("bad isoch mps_raw"));
         }

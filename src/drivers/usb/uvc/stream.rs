@@ -28,7 +28,7 @@ fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT
     let h = u32::from(sel.frame_h.max(480));
     let est = if sel.is_mjpeg { w.saturating_mul(h) } else { w.saturating_mul(h).saturating_mul(2) };
     b[18..22].copy_from_slice(&est.to_le_bytes());
-    let pkt_total = u32::from(sel.mps_raw & 0x7FF) * (u32::from((sel.mps_raw >> 11) & 0x3) + 1);
+    let pkt_total = dwc2::wmax_payload_per_uframe(sel.mps_raw);
     b[22..26].copy_from_slice(&pkt_total.to_le_bytes());
     b
 }
@@ -94,8 +94,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     // 若 reselect 降级到了更低带宽的 alt（例如 mult=1），须把 COMMIT 中的
     // dwMaxPayloadTransferSize 压到该 alt 的实际每微帧吞吐，否则摄像头
     // 按 3060 B 分包、主机只收 1020 B/uframe 会导致数据截断。
-    let alt_mps = u32::from(sel.mps_raw & 0x7FF)
-        * (u32::from((sel.mps_raw >> 11) & 0x3) + 1);
+    let alt_mps = dwc2::wmax_payload_per_uframe(sel.mps_raw);
     if alt_mps > 0 && alt_mps < sel.negotiated_payload_size {
         log::info!("UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
             sel.negotiated_payload_size, alt_mps);

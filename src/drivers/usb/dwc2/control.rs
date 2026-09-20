@@ -1,12 +1,12 @@
 //! EP0 控制传输：`Ep0` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
+use super::ch::{hcchar_control, hctsiz, pktcnt_for, Channel};
+use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
+use super::regs::HCTSIZ;
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::setup;
-use super::ch::{Channel, hcchar_control, hctsiz, pktcnt_for};
-use super::regs::HCTSIZ;
-use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
 
 /// EP0 控制端点句柄：把控制传输的公共前置参数（设备地址、EP0 最大包长）
 /// 绑定为端点自身状态。
@@ -45,10 +45,14 @@ impl Ep0 {
             cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
 
             let mut hc = hcchar_control(0, 0, 64, false);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
 
             hc = hcchar_control(0, 0, 64, true);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Data1, 1, wlen as u32), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(
+                hc,
+                hctsiz(HCTSIZ::PID::Data1, 1, wlen as u32),
+                OFF_EP0 as u32,
+            )?;
             cache::dcache_invalidate_after_dma(dma_ptr().add(OFF_EP0), wlen as usize);
 
             let sl = core::slice::from_raw_parts(dma_ptr().add(OFF_EP0), wlen as usize);
@@ -61,7 +65,7 @@ impl Ep0 {
             let b_device_class = sl[4];
 
             hc = hcchar_control(0, 0, 64, false);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
 
             Ok((vid, pid, ep0_mps, b_device_class))
         }
@@ -121,7 +125,7 @@ impl Ep0 {
             cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
 
             let mut hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
 
             let mut left = total;
             let mut out_off: usize = 0;
@@ -130,7 +134,11 @@ impl Ep0 {
                 let chunk = left.min(mps);
                 let pkts = pktcnt_for(mps, chunk);
                 hc = hcchar_control(dev, 0, mps, true);
-                let pid = if data1 { HCTSIZ::PID::Data1 } else { HCTSIZ::PID::Data0 };
+                let pid = if data1 {
+                    HCTSIZ::PID::Data1
+                } else {
+                    HCTSIZ::PID::Data0
+                };
                 Channel::CONTROL.xfer(hc, hctsiz(pid, pkts, chunk), DMA_OFF_SMALL_IO as u32)?;
                 cache::dcache_invalidate_after_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
                 core::ptr::copy_nonoverlapping(
@@ -144,7 +152,7 @@ impl Ep0 {
             }
 
             hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
             Ok(())
         }
     }
@@ -164,7 +172,7 @@ impl Ep0 {
             cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
 
             let mut hc = hcchar_control(dev, 0, mps, false);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
 
             let mut left = data.len() as u32;
             let mut src: usize = 0;
@@ -179,7 +187,11 @@ impl Ep0 {
                 );
                 cache::dcache_clean_for_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
                 hc = hcchar_control(dev, 0, mps, false);
-                let pid = if data1 { HCTSIZ::PID::Data1 } else { HCTSIZ::PID::Data0 };
+                let pid = if data1 {
+                    HCTSIZ::PID::Data1
+                } else {
+                    HCTSIZ::PID::Data0
+                };
                 Channel::CONTROL.xfer(hc, hctsiz(pid, pkts, chunk), DMA_OFF_SMALL_IO as u32)?;
                 src += chunk as usize;
                 left -= chunk;
@@ -187,7 +199,7 @@ impl Ep0 {
             }
 
             hc = hcchar_control(dev, 0, mps, true);
-            Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
+            Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
             Ok(())
         }
     }
@@ -208,10 +220,10 @@ fn write_no_data_raw(dev: u32, setup_pkt: [u8; 8], mps: u32) -> UsbResult<()> {
         cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
 
         let hc = hcchar_control(dev, 0, mps, false);
-        Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
+        Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Setup, 1, 8), OFF_EP0 as u32)?;
 
         let hc = hcchar_control(dev, 0, mps, true);
-        Channel::CONTROL.xfer( hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
+        Channel::CONTROL.xfer(hc, hctsiz(HCTSIZ::PID::Data1, 1, 0), OFF_EP0 as u32)?;
         Ok(())
     }
 }

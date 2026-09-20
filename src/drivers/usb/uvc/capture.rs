@@ -6,24 +6,23 @@ use crate::drivers::usb::dwc2;
 use crate::drivers::usb::dwc2::{DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 
 use super::descriptor::UvcStreamSelection;
-use super::prefs::FRAME_DEBUG;
 
 pub const UVC_WORK_AREA_BYTES: usize = 65536;
 pub const UVC_ASSEMBLED_JPEG_DMA_OFF: usize = DMA_OFF_UVC_BULK + UVC_WORK_AREA_BYTES;
 
-fn parse_uvc_packet(pkt: &[u8]) -> (bool, usize, Option<u8>, u8) {
+fn parse_uvc_packet(pkt: &[u8]) -> (bool, usize, Option<u8>) {
     if pkt.len() < 2 {
-        return (false, 0, None, 0);
+        return (false, 0, None);
     }
     let hlen = pkt[0] as usize;
     if hlen < 2 || hlen > pkt.len() {
-        return (false, 0, None, 0);
+        return (false, 0, None);
     }
     let info = pkt[1];
     let cur_fid = info & 0x01;
     let payload_len = pkt.len() - hlen;
     let eof = (info & 0x02) != 0;
-    (eof, payload_len, Some(cur_fid), info)
+    (eof, payload_len, Some(cur_fid))
 }
 
 enum FrameState {
@@ -50,7 +49,6 @@ struct CapturingPacket<'a> {
     payload_len: usize,
     eof: bool,
     cur_fid: u8,
-    info: u8,
     jpeg_len: &'a mut usize,
     jpeg_cap: usize,
 }
@@ -60,16 +58,8 @@ fn process_packet(
     state: &mut FrameState,
     jpeg_len: &mut usize,
     jpeg_cap: usize,
-    debug_remaining: &mut u32,
 ) -> UsbResult<bool> {
-    let (eof, payload_len, fid_opt, info) = parse_uvc_packet(pkt);
-    if *debug_remaining > 0 {
-        log::info!("UVC-pkt uf={} len={} hlen={} info={:#04x} fid={:?} eof={} payload={}",
-            dwc2::current_uframe(),
-            pkt.len(), if pkt.is_empty() { 0 } else { pkt[0] as usize },
-            info, fid_opt, eof, payload_len);
-        *debug_remaining -= 1;
-    }
+    let (eof, payload_len, fid_opt) = parse_uvc_packet(pkt);
     let Some(cur_fid) = fid_opt else {
         return Ok(false);
     };
@@ -80,7 +70,7 @@ fn process_packet(
                 None => *last_fid = Some(cur_fid),
                 Some(prev) if prev != cur_fid => {
                     *state = FrameState::Capturing { frame_fid: cur_fid, saw_data: false };
-                    let p = CapturingPacket { pkt, payload_len, eof, cur_fid, info, jpeg_len, jpeg_cap };
+                    let p = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
                     return process_packet_capturing(state, p);
                 }
                 _ => {}
@@ -88,7 +78,7 @@ fn process_packet(
             Ok(false)
         }
         FrameState::Capturing { .. } => {
-            let p = CapturingPacket { pkt, payload_len, eof, cur_fid, info, jpeg_len, jpeg_cap };
+            let p = CapturingPacket { pkt, payload_len, eof, cur_fid, jpeg_len, jpeg_cap };
             process_packet_capturing(state, p)
         }
     }
@@ -157,10 +147,6 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
             && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len - 2, 2)
                 .map(|t| t[0] == 0xff && t[1] == 0xd9)
                 .unwrap_or(false);
-        if FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
-            log::info!("UVC-trace FID-flip uf={} frame_fid={} new_fid={} saw_data={} jpeg_len={} has_eoi={}",
-                dwc2::current_uframe(), *frame_fid, p.cur_fid, *saw_data, *p.jpeg_len, has_eoi);
-        }
         if *saw_data && has_eoi {
             return Ok(true);
         }
@@ -192,10 +178,6 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
             .map(|t| t[0] == 0xff && t[1] == 0xd9)
             .unwrap_or(false);
     let frame_done = p.eof && *saw_data && has_eoi_now;
-    if p.eof && FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed) {
-        log::info!("UVC-trace EOF uf={} fid={} info={:#04x} payload={} saw_data={} jpeg_len={} has_eoi={} done={}",
-            dwc2::current_uframe(), p.cur_fid, p.info, p.payload_len, *saw_data, *p.jpeg_len, has_eoi_now, frame_done);
-    }
     if p.eof && *saw_data && !has_eoi_now {
         // 残帧（带 EOF 但无 EOI）：丢弃累积，回到 WaitFirstSwitch 等下一次 FID 翻转。
         // 不返回 false 让 caller 误以为"还在累积"——直接置 state 回 wait 让下一帧从干净状态开始。
@@ -207,19 +189,14 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
     Ok(frame_done)
 }
 
-#[inline]
-fn max_packet_11(mps_raw: u16) -> u32 {
-    u32::from(mps_raw & 0x7FF)
-}
-
 /// 抓一帧（视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`]）。
 ///
 /// **关键**：等时模式下 `mult=1` 时，每次 `IsochInEp::read_uframe` 返回的整个数据（最多 mps 字节）就是
 /// **一个完整的 USB 包 = 一个 UVC 数据包**（带 12 字节头），**不可再切分**。
 pub fn uvc_capture_one_frame(ep0: &dwc2::Ep0, sel: &UvcStreamSelection) -> UsbResult<usize> {
     let iso = dwc2::IsochInEp::new(ep0.dev(), sel.ep_num, sel.mps_raw);
-    let mps_low = max_packet_11(sel.mps_raw).max(1) as usize;
-    let mult = (((sel.mps_raw >> 11) & 0x3) as u32 + 1).clamp(1, 3) as usize;
+    let mps_low = dwc2::wmax_mps(sel.mps_raw).max(1) as usize;
+    let mult = dwc2::wmax_mult(sel.mps_raw).clamp(1, 3) as usize;
     let jpeg_cap = UVC_BULK_DMA_CAP.saturating_sub(UVC_WORK_AREA_BYTES);
     let mut jpeg_len = 0usize;
     let mut transfers = 0u32;
@@ -229,12 +206,6 @@ pub fn uvc_capture_one_frame(ep0: &dwc2::Ep0, sel: &UvcStreamSelection) -> UsbRe
     let mut state = FrameState::WaitFirstSwitch {
         last_fid: if prev_eof_fid <= 1 { Some(prev_eof_fid) } else { None },
     };
-    let mut debug_remaining: u32 = 0;
-    let frame_dbg = FRAME_DEBUG.load(core::sync::atomic::Ordering::Relaxed);
-    let uf_start = dwc2::current_uframe();
-    let mut uf_first_switch: u32 = uf_start;
-    let mut uframes_at_switch: u32 = 0;
-
     const MAX_UFRAMES: u32 = 80_000;
     for _ in 0..MAX_UFRAMES {
         transfers = transfers.wrapping_add(1);
@@ -245,9 +216,8 @@ pub fn uvc_capture_one_frame(ep0: &dwc2::Ep0, sel: &UvcStreamSelection) -> UsbRe
         data_transfers = data_transfers.wrapping_add(1);
         let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
-        let was_waiting = matches!(state, FrameState::WaitFirstSwitch { .. });
-        let eof = if mult == 1 {
-            process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)?
+            let eof = if mult == 1 {
+            process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap)?
         } else {
             let mut hit_eof = false;
             let mut off = 0usize;
@@ -255,32 +225,16 @@ pub fn uvc_capture_one_frame(ep0: &dwc2::Ep0, sel: &UvcStreamSelection) -> UsbRe
                 let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
                 let pkt = &slice[off..end];
                 off = end;
-                if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap, &mut debug_remaining)? {
+                if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
                     hit_eof = true;
                     break;
                 }
             }
             hit_eof
-        };
-        if frame_dbg && was_waiting && matches!(state, FrameState::Capturing { .. }) {
-            uf_first_switch = dwc2::current_uframe();
-            uframes_at_switch = transfers;
-        }
-        if eof {
+        };        if eof {
             if let FrameState::Capturing { frame_fid, .. } = state {
                 LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
-            }
-            if frame_dbg {
-                let uf_end = dwc2::current_uframe();
-                let dwait = uf_first_switch.wrapping_sub(uf_start) & 0xffff;
-                let dcap = uf_end.wrapping_sub(uf_first_switch) & 0xffff;
-                log::info!("UVC: frame {} bytes ({} loops, {} data; HFNUM dwait={} uf ({}.{} ms / {} loops), dcap={} uf ({}.{} ms / {} loops), mult={})",
-                    jpeg_len, transfers, data_transfers,
-                    dwait, dwait / 8, (dwait % 8) * 125 / 10, uframes_at_switch,
-                    dcap, dcap / 8, (dcap % 8) * 125 / 10, transfers - uframes_at_switch,
-                    mult);
-            }
-            return Ok(jpeg_len);
+            }            return Ok(jpeg_len);
         }
     }
     log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",

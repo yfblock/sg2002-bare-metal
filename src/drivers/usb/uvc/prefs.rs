@@ -1,12 +1,7 @@
 //! 选流/抓帧的原子偏好开关与 setter。
 //!
-//! 除 [`FRAME_DEBUG`]（抓帧期间实时读取）外，各项须在
-//! [`crate::drivers::usb::uvc::parse_uvc_video_stream`] 之前设置，
+//! 各项须在 [`crate::drivers::usb::uvc::parse_uvc_video_stream`] 之前设置，
 //! 解析与 alt 回选时读取。
-
-/// 全局开关：为 `true` 时在抓帧路径上对 EOF / FID 翻转打印微帧级 trace。
-pub static FRAME_DEBUG: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
 
 pub static PREFERRED_MAX_PIXELS: core::sync::atomic::AtomicU32 =
     core::sync::atomic::AtomicU32::new(0);

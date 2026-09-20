@@ -1,29 +1,40 @@
 //! JPU MMIO 寄存器（`tock-registers`）与平台 bring-up 辅助函数。
 
-#![allow(dead_code)]
-
 use tock_registers::{
-    interfaces::{Readable, Writeable},
+    interfaces::{Readable, ReadWriteable, Writeable},
     register_bitfields, register_structs,
     registers::{ReadOnly, ReadWrite},
 };
 
-use crate::drivers::soc::TOP_BASE;
 use core::time::Duration;
 
 use crate::arch::time::{delay, elapsed_since, rdtime};
 
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
-pub const VC_REG_BASE: usize = 0x0B03_0000;
 
-const TOP_DDR_ADDR_MODE_OFF: usize = 0x64;
-const TOP_CLK_JPEG_OFF: usize = 0x2008;
-const TOP_RST_JPEG_OFF: usize = 0x3000;
 
-const TOP_CLK_JPEG_ENABLE: u32 = 0x3300;
-const TOP_RST_JPEG_RELEASE_BIT: u32 = 1 << 4;
-const TOP_DDR_VD_REMAP_BIT: u32 = 1 << 24;
-const VC_BLOCK_ENABLE: u32 = 0x1F;
+register_bitfields![u32,
+    /// VC（Video Codec）子块使能寄存器（bit0-4 = 各子块使能）。
+    pub VC_ENABLE [
+        BLOCKS OFFSET(0) NUMBITS(5) [],
+    ],
+];
+
+register_structs! {
+    /// VC 子块控制。
+    pub VcRegs {
+        (0x00 => pub enable: ReadWrite<u32, VC_ENABLE::Register>),
+        (0x04 => @END),
+    }
+}
+
+/// 取 VC 寄存器视图（基址为编译期常量，恒有效）。
+#[inline]
+fn vc() -> &'static VcRegs {
+    unsafe { &*(0x0B03_0000 as *const VcRegs) }
+}
+
+
 const JPU_WARMUP_BBC_BASE: u32 = 0x8026_C000;
 
 /// JPEG 像素格式（写入 MCU/DPB 相关寄存器）
@@ -152,75 +163,35 @@ register_structs! {
 
 /// 取 JPU 寄存器视图（[`GPIO::new`] 同款：由调用方传入已映射的 MMIO 基址）。
 #[inline]
-pub fn jpu_regs_at(jpu_base: usize) -> &'static JpuRegisters {
-    // SAFETY: 调用方保证 `jpu_base` 为有效 MMIO 映射。
-    unsafe { &*(jpu_base as *const JpuRegisters) }
-}
-
-/// 默认物理基址（ArceOS 等线性 MMIO 映射）。
-#[inline]
 pub fn jpu_regs() -> &'static JpuRegisters {
-    jpu_regs_at(JPU_REG_BASE)
-}
-
-#[inline]
-fn mmio_read32(addr: usize) -> u32 {
-    // SAFETY: 调用方保证 `addr` 为有效 MMIO 映射。
-    unsafe { core::ptr::read_volatile(addr as *const u32) }
-}
-
-#[inline]
-fn mmio_write32(addr: usize, value: u32) {
-    // SAFETY: 调用方保证 `addr` 为有效 MMIO 映射。
-    unsafe { core::ptr::write_volatile(addr as *mut u32, value) }
-}
-
-#[inline]
-fn mmio_modify32(addr: usize, update: impl FnOnce(u32) -> u32) {
-    let value = mmio_read32(addr);
-    mmio_write32(addr, update(value));
+    unsafe { &*(JPU_REG_BASE as *const JpuRegisters) }
 }
 
 /// TOP JPEG 时钟、复位、DDR remap 与 VC 子块使能，并完成 JPU 软复位。
-pub fn hardware_init_at(jpu_base: usize, top_base: usize, vc_base: usize) {
-    mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
-    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
-    mmio_modify32(top_base + TOP_DDR_ADDR_MODE_OFF, |v| v | TOP_DDR_VD_REMAP_BIT);
-    mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
-    let _ = mmio_read32(vc_base);
-
-    let regs = jpu_regs_at(jpu_base);
-    let _ = regs.pic_status.get();
-    regs.bbc_bas_addr
-        .write(VALUE32::VAL.val(JPU_WARMUP_BBC_BASE));
-    let _ = regs.bbc_bas_addr.get();
-
-    wait_sw_reset_done_at(jpu_base);
-}
-
-/// 和 [`hardware_init_at`] 一样，但**不设 VD_REMAP**。
+/// 设时钟/复位/VC，但**不设 VD_REMAP**。
 /// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr[39:32]），
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
 /// 小核 identity 映射（VA=PA），不需要地址扩展。
-pub fn hardware_init_at_no_vd_remap(jpu_base: usize, top_base: usize, vc_base: usize) {
-    mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
-    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
-    // 不设 TOP_DDR_ADDR_MODE_OFF / VD_REMAP——小核 32 位地址不需要扩展
-    mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
-    let _ = mmio_read32(vc_base);
+pub fn hardware_init_no_vd_remap() {
+    let t = crate::drivers::soc::top();
+    // JPEG 时钟使能 + 复位释放(TOP 寄存器,soc.rs TopRegs 视图)
+    t.clk_jpeg.set(t.clk_jpeg.get() | 0x3300); // RMW: OR JPEG 时钟使能
+    t.rst.modify(crate::drivers::soc::TOP_RST::JPEG::SET);
+    // VC 子块使能(bit0-4)
+    vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
 
-    let regs = jpu_regs_at(jpu_base);
+    let regs = jpu_regs();
     let _ = regs.pic_status.get();
     regs.bbc_bas_addr
         .write(VALUE32::VAL.val(JPU_WARMUP_BBC_BASE));
     let _ = regs.bbc_bas_addr.get();
 
-    wait_sw_reset_done_at(jpu_base);
+    wait_sw_reset_done();
 }
 
 /// 给 JPEG 块打一次**真正的复位脉冲**，然后重新初始化（不含 VD_REMAP / DDR mode）。
 ///
-/// 为什么需要它：`hardware_init_at*` 里只有 `v | TOP_RST_JPEG_RELEASE_BIT`，
+/// 为什么需要它：常规 init 只做 `v | TOP_RST_JPEG_RELEASE_BIT`，
 /// 也就是只"释放"复位——对一个已经在跑（或已经挂死）的块是**空操作**，
 /// 从来没有把复位真正拉低过。所以 JPU 挂死后，无论重跑 `hardware_init_*`
 /// 还是重建整个 `JpuDecoder`，硬件状态都不会被清掉（实测挂死后连续 280+ 帧
@@ -228,84 +199,51 @@ pub fn hardware_init_at_no_vd_remap(jpu_base: usize, top_base: usize, vc_base: u
 ///
 /// 只动 JPEG 的时钟/复位位和 VC 使能，**不写** `TOP_DDR_ADDR_MODE_OFF`
 /// （那会改 DDR 地址映射把大核搞崩）。
-pub fn hard_reset_at(jpu_base: usize, top_base: usize, vc_base: usize) {
-    // 1) 拉低复位（清 release 位）
-    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v & !TOP_RST_JPEG_RELEASE_BIT);
-    let _ = mmio_read32(top_base + TOP_RST_JPEG_OFF);
-    // 2) 保持一段复位时间
+pub fn hard_reset_at() {
+    let t = crate::drivers::soc::top();
+    // 1) 拉低复位(清 JPEG release 位)
+    t.rst.modify(crate::drivers::soc::TOP_RST::JPEG::CLEAR);
     delay(Duration::from_millis(1));
-    // 3) 时钟使能后再释放复位
-    mmio_modify32(top_base + TOP_CLK_JPEG_OFF, |v| v | TOP_CLK_JPEG_ENABLE);
-    mmio_modify32(top_base + TOP_RST_JPEG_OFF, |v| v | TOP_RST_JPEG_RELEASE_BIT);
-    let _ = mmio_read32(top_base + TOP_RST_JPEG_OFF);
+    // 2) 时钟使能后再释放复位
+    t.clk_jpeg.set(0x3300);
+    t.rst.modify(crate::drivers::soc::TOP_RST::JPEG::SET);
     delay(Duration::from_millis(1));
-    // 4) 重新使能 VC 块并做一次 warm-up + 软复位
-    mmio_modify32(vc_base, |v| v | VC_BLOCK_ENABLE);
-    let _ = mmio_read32(vc_base);
-
-    let regs = jpu_regs_at(jpu_base);
-    clear_pic_status_at(jpu_base, regs.pic_status.get());
-    regs.bbc_bas_addr
-        .write(VALUE32::VAL.val(JPU_WARMUP_BBC_BASE));
-    let _ = regs.bbc_bas_addr.get();
-
-    wait_bbc_idle_at(jpu_base);
-    wait_sw_reset_done_at(jpu_base);
+    // 3) VC 子块重新使能
+    vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
+    let _ = vc().enable.get();
 }
 
-/// 默认物理基址 bring-up。
-pub fn hardware_init() {
-    hardware_init_at(JPU_REG_BASE, TOP_BASE, VC_REG_BASE);
-}
-
-#[inline]
-pub fn clear_pic_status_at(jpu_base: usize, status: u32) {
-    jpu_regs_at(jpu_base).pic_status.set(status);
-}
-
-#[inline]
 pub fn clear_pic_status(status: u32) {
-    clear_pic_status_at(JPU_REG_BASE, status);
+    jpu_regs().pic_status.set(status);
 }
 
+#[inline]
 /// 等待软复位完成。按时间设上限（10ms 足够）——次数上限的实际时长取决于主频
 /// 和循环开销，在小核上会长到不可接受，见 [`crate::arch::time`]。
-pub fn wait_sw_reset_done_at(jpu_base: usize) {
-    let regs = jpu_regs_at(jpu_base);
+pub fn wait_sw_reset_done() {
+    let regs = jpu_regs();
     regs.pic_start.write(MJPEG_PIC_START::START_INIT::SET);
     let t0 = rdtime();
     let timeout = Duration::from_millis(10);
-    let mut n = 0u32;
-    while n < 100_000 && elapsed_since(t0) < timeout {
+    while elapsed_since(t0) < timeout {
         if !regs.pic_start.is_set(MJPEG_PIC_START::START_INIT) {
             return;
         }
         core::hint::spin_loop();
-        n += 1;
     }
 }
 
-pub fn wait_sw_reset_done() {
-    wait_sw_reset_done_at(JPU_REG_BASE);
-}
-
 /// 等待 BBC 空闲。同上，按时间设上限。
-pub fn wait_bbc_idle_at(jpu_base: usize) {
-    let regs = jpu_regs_at(jpu_base);
+pub fn wait_bbc_idle() {
+    let regs = jpu_regs();
     let t0 = rdtime();
     let timeout = Duration::from_millis(10);
-    let mut n = 0u32;
-    while n < 100_000 && elapsed_since(t0) < timeout {
+    while elapsed_since(t0) < timeout {
         if !regs.bbc_busy.is_set(MJPEG_BBC_BUSY::BUSY) {
             return;
         }
         core::hint::spin_loop();
-        n += 1;
     }
-}
-
-pub fn wait_bbc_idle() {
-    wait_bbc_idle_at(JPU_REG_BASE);
 }
 
 #[inline]

@@ -19,8 +19,8 @@ use crate::drivers::usb;
 #[allow(unused_imports)]
 use tock_registers::registers::ReadWrite;
 use super::regs::{
-    Dwc2Regs, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRSTCTL,
-    GUSBCFG, HCFG, HPRT0, HPRT0_W1C_MASK,
+    Dwc2Regs, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
+    GUSBCFG, HCFG, HPRT0,
 };
 
 /// 返回 DWC2 寄存器视图（基址为编译期常量，恒有效）。
@@ -133,24 +133,16 @@ pub fn hprt0() -> &'static ReadWrite<u32, HPRT0::Register> {
 ///    "禁用/清除"，不清掉会误禁用端口（[`HPRT0_W1C_MASK`]）；
 /// 2. 清掉目标字段位——否则 `rst=false` 这种 CLEAR 语义写不进去。
 fn hprt0_port(pwr: bool, rst: bool) {
-    let r = regs();
-    // PWR(bit12)/RST(bit8) 字段掩码。注:tock 0.10 经 `HPRT0::PWR.mask` 路径
-    // 解析到的不是本字段的 Field(实测得 0x1),故显式给出(0x1100)。
-    const PWR_RST_MASK: u32 = (1 << 8) | (1 << 12);
-    let mut v = r.hprt0.get() & !HPRT0_W1C_MASK & !PWR_RST_MASK;
-    if pwr {
-        v |= HPRT0::PWR::SET.value;
-    }
-    if rst {
-        v |= HPRT0::RST::SET.value;
-    }
-    r.hprt0.set(v);
-}
-
-/// 写 1 清 `CONNDET`（连接变化位）——唯一需要主动写 W1C 位的场合。
-fn hprt0_clear_conn_det() {
-    let r = regs();
-    r.hprt0.set((r.hprt0.get() & !HPRT0_W1C_MASK) | (1 << 1));
+    regs().hprt0.modify(
+        HPRT0::PWR.val(pwr as u32)
+            + HPRT0::RST.val(rst as u32)
+            // W1C 位显式加入并置 0:modify() 的 RMW 会把它们从读回值中清掉
+            // (写 0 到 W1C = 安全无操作),防止误清 pending 状态。
+            + HPRT0::CONNDET.val(0)
+            + HPRT0::ENA.val(0)
+            + HPRT0::ENACHG.val(0)
+            + HPRT0::OVRCURCHG.val(0)
+    );
 }
 
 fn port_power_on() {
@@ -162,7 +154,7 @@ fn port_reset_pulse() {
     // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
     // 这里给到 ≥60ms 留余量，并保留 PWR；CONNDET 若是 pending 先写 1 清掉。
     if hprt0().is_set(HPRT0::CONNDET) {
-        hprt0_clear_conn_det();
+        hprt0().modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
     }
     hprt0_port(true, true); // 保留 PWR,拉 PRTRST
     delay(Duration::from_millis(60)); // PRTRST 60ms
@@ -177,38 +169,12 @@ fn port_reset_pulse() {
 /// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
 pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     if hprt0().is_set(HPRT0::CONNDET) {
-        hprt0_clear_conn_det();
+        hprt0().modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
     }
     port_reset_pulse();
     Ok(())
 }
 
-/// 打印根口与片内 PHY 快照（`CONNSTS==0` 时排障用）。
-///
-/// # 参数
-/// - `tag`：日志前缀，便于区分多次 dump。
-pub fn debug_dump_root_port_hw(tag: &str) {
-    let r = regs();
-    log::debug!("USB-DBG {} HPRT0={:#010x} LNSTS={} CONNSTS={} CONNDET={} RST={} PWR={} SPD={}",
-        tag,
-        r.hprt0.get(),
-        r.hprt0.read(HPRT0::LNSTS),
-        r.hprt0.is_set(HPRT0::CONNSTS),
-        r.hprt0.is_set(HPRT0::CONNDET),
-        r.hprt0.is_set(HPRT0::RST),
-        r.hprt0.is_set(HPRT0::PWR),
-        r.hprt0.read(HPRT0::SPD),);
-    log::debug!("USB-DBG {} GOTGCTL={:#010x} GUSBCFG={:#010x} GAHBCFG={:#010x}",
-        tag,
-        r.gotgctl.get(),
-        r.gusbcfg.get(),
-        r.gahbcfg.get());
-    log::debug!("USB-DBG {} GINTSTS={:#010x} PCGCTL={:#010x} HCFG={:#010x}",
-        tag,
-        r.gintsts.get(),
-        r.pcgctl.get(),
-        r.hcfg.get());
-}
 
 // --- CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）---
 
@@ -266,11 +232,11 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
     }
 
     let r = regs();
-    r.grxfsiz.set(rx & 0xffff);
+    r.grxfsiz.write(GRXFSIZ::RXFDEP.val(rx));
     r.gnptxfsiz
-        .set(((nptx << 16) & 0xffff_0000) | (rx & 0xffff));
+        .write(GNPTXFSIZ::NPTXFDEP.val(nptx) + GNPTXFSIZ::NPTXFSTADDR.val(rx));
     r.hptxfsiz
-        .set(((ptx << 16) & 0xffff_0000) | ((rx + nptx) & 0xffff));
+        .write(HPTXFSIZ::PTXFDEP.val(ptx) + HPTXFSIZ::PTXFSTADDR.val(rx + nptx));
 
     let snpsid = r.gsnpsid.get();
     let ded = r.ghwcfg4.is_set(GHWCFG4::DED_FIFO_EN);

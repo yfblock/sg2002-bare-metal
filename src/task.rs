@@ -104,7 +104,7 @@ fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) 
             }
             st.tick_ive += crate::arch::time::rdtime().wrapping_sub(t_ive0);
 
-            let reported = len.min(yuv_buf::YUV_BUF_MAX);
+            let reported = len.min(yuv_buf::YUV_BUF_SIZE);
             let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
                 | ipc::FLAG_YUV_READY
                 | ipc::encode_dims(w, h);
@@ -140,15 +140,13 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
     let kbps = if dt > 0 { st.byte_acc * crate::arch::time::TIMEBASE_HZ / dt / 1024 } else { 0 };
     uart::print(" KB/s=");
     uart::print_dec(kbps);
-    let us = |t: u64| t / 25 / frames.max(1);
+    let us = |t: u64| t * 1_000_000 / crate::arch::time::TIMEBASE_HZ / frames.max(1);
     uart::print(" us{cap=");
     uart::print_dec(us(st.tick_cap));
     uart::print(" dec=");
     uart::print_dec(us(st.tick_dec));
     uart::print(" ive=");
     uart::print_dec(us(st.tick_ive));
-    uart::print(" wyuv=");
-    uart::print_dec(us(jpu::take_write_ticks()));
     uart::print("} jpu{inv1=");
     uart::print_dec(us(crate::drivers::jpu::trace::take_step_ticks(
         crate::drivers::jpu::trace::step::INV_FRAME) as u64));

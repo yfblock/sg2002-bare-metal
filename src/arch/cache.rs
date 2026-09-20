@@ -4,7 +4,6 @@
 //! Zicbom 编码空间重叠——同时启用会因 binutils 解码歧义直接 `compile_error!`。
 //! USB/JPU 的 DMA 缓冲都靠这里的 clean/invalidate 保证与 CPU 视图一致。
 
-#[allow(dead_code)]
 const CACHE_LINE: usize = 64;
 
 // 与标准 RISC-V Zicbom 缓存指令冲突时给出明确报错——zicbom 与 C906 自定义指令编码空间重叠，
@@ -43,7 +42,7 @@ pub fn dcache_clean_range(start: usize, size: usize) {
         unsafe { dcache_cva(addr) };
         addr += CACHE_LINE;
     }
-    unsafe { core::arch::asm!("fence iorw, iorw") };
+    riscv::asm::fence();
 }
 
 /// 把 `[start, start+size)` 之内的所有缓存行 **invalidate**（丢掉脏数据，
@@ -59,7 +58,7 @@ pub fn dcache_invalidate_range(start: usize, size: usize) {
         unsafe { dcache_iva(addr) };
         addr += CACHE_LINE;
     }
-    unsafe { core::arch::asm!("fence iorw, iorw") };
+    riscv::asm::fence();
 }
 
 // ============================================================================
