@@ -22,6 +22,7 @@
 //! └── drivers/      从 sg200x-bsp 迁移的硬件驱动
 //!     ├── soc       MMIO 基址常量
 //!     ├── mailbox   cvi 硬件邮箱控制器(门铃/认领/跨核锁槽)
+//!     ├── wdt        DW APB 看门狗(wedge 自愈复位)
 //!     ├── pinmux    引脚复用(USB VBUS)
 //!     ├── gpio      GPIO 输出
 //!     ├── usb/      USB 主机栈(DWC2 + UVC 协议)

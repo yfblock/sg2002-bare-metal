@@ -66,8 +66,13 @@ const LAST_PC_PA: usize = 0x0190_040C;
 /// 启动心跳（`trap::init_interrupts` 尾部调用：先装 cmp 再开 MTIE，避免风暴）。
 pub fn init_heartbeat() {
     unsafe {
+        // 观测字清零:ctx RAM 上电为垃圾值,不清则 hb 从乱数起跳、判读依赖增量
+        core::ptr::write_volatile(HEARTBEAT_PA as *mut u32, 0);
+        core::ptr::write_volatile(LAST_PC_PA as *mut u32, 0);
         rearm();
         riscv::register::mie::set_mtimer();
+        // 看门狗自愈:此后的喂狗职责归心跳 ISR(总线 wedge → 停跳 → 复位)
+        crate::drivers::wdt::start();
     }
 }
 
@@ -81,8 +86,10 @@ fn rearm() {
     }
 }
 
-/// mtimer ISR：心跳 +1 → 采样被中断 PC → 重装下一拍（绝对值，防迟到补拍风暴）。
+/// mtimer ISR：喂狗 → 心跳 +1 → 采样被中断 PC → 重装下一拍（绝对值，防迟到补拍风暴）。
+/// 喂狗放最前：wedge 时心跳即喂狗，停跳后 WDT ≈0.34s 复位整片。
 pub fn heartbeat_tick() {
+    crate::drivers::wdt::kick();
     unsafe {
         let hb = core::ptr::read_volatile(HEARTBEAT_PA as *const u32);
         core::ptr::write_volatile(HEARTBEAT_PA as *mut u32, hb.wrapping_add(1));
