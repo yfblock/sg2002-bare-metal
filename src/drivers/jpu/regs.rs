@@ -246,19 +246,6 @@ pub fn wait_bbc_idle() {
     }
 }
 
-#[inline]
-pub fn pic_ctrl_value(dc_idx: u32, ac_idx: u32) -> u32 {
-    (MJPEG_PIC_CTRL::HUFF_AC_IDX.val(ac_idx)
-        + MJPEG_PIC_CTRL::HUFF_DC_IDX.val(dc_idx)
-        + MJPEG_PIC_CTRL::USER_HUFF_TAB::SET)
-        .into()
-}
-
-#[inline]
-pub fn bbc_strm_ctrl_value(pages: u32) -> u32 {
-    (MJPEG_BBC_STRM_CTRL::END_FLAG::SET + MJPEG_BBC_STRM_CTRL::PAGES.val(pages)).into()
-}
-
 pub const HUFF_PHASE_MIN: u32 = 0x003;
 pub const HUFF_PHASE_MAX: u32 = 0x403;
 pub const HUFF_PHASE_PTR: u32 = 0x803;

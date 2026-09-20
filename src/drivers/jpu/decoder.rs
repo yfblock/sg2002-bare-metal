@@ -4,10 +4,10 @@ use super::header::{JpegHeaderInfo, parse_jpeg_header};
 use super::mem::{PhysBuffer, copy_to_phys, jpu_free};
 use super::regs::{
     HUFF_ADDR_MAX, HUFF_ADDR_PTR, HUFF_PHASE_MAX, HUFF_PHASE_MIN, HUFF_PHASE_PTR, HUFF_PHASE_VAL,
-    MJPEG_HUFF_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START, MJPEG_PIC_STATUS,
-    MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y, STREAM_BUF_SIZE, VALUE32,
-    bbc_strm_ctrl_value, jpu_regs,
-    pic_ctrl_value, wait_bbc_idle, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
+    MJPEG_BBC_STRM_CTRL, MJPEG_HUFF_CTRL, MJPEG_PIC_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START,
+    MJPEG_PIC_STATUS, MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y,
+    STREAM_BUF_SIZE, VALUE32, jpu_regs, wait_bbc_idle,
+    FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
 };
 use crate::arch::cache::dcache_clean_range;
 use core::time::Duration;
@@ -208,7 +208,10 @@ fn configure_stream_regs(stream_buf: &PhysBuffer,
     jpu.bbc_wr_ptr.write(VALUE32::VAL.val(stream_end));
 
     let strm_pages = copy_len.div_ceil(256);
-    jpu.bbc_strm_ctrl.set(bbc_strm_ctrl_value(strm_pages as u32));
+    jpu.bbc_strm_ctrl.set(
+        (MJPEG_BBC_STRM_CTRL::END_FLAG::SET + MJPEG_BBC_STRM_CTRL::PAGES.val(strm_pages as u32))
+            .into(),
+    );
 
     jpu.gbu_tt_cnt.write(VALUE32::VAL.val(0));
     jpu.gbu_tt_cnt_h.write(VALUE32::VAL.val(0));
@@ -220,7 +223,12 @@ fn configure_stream_regs(stream_buf: &PhysBuffer,
         huff_dc_idx = (huff_dc_idx << 1) | header.dc_huff_tbl[i] as u32;
         huff_ac_idx = (huff_ac_idx << 1) | header.ac_huff_tbl[i] as u32;
     }
-    jpu.pic_ctrl.set(pic_ctrl_value(huff_dc_idx, huff_ac_idx));
+    jpu.pic_ctrl.set(
+        (MJPEG_PIC_CTRL::HUFF_DC_IDX.val(huff_dc_idx)
+            + MJPEG_PIC_CTRL::HUFF_AC_IDX.val(huff_ac_idx)
+            + MJPEG_PIC_CTRL::USER_HUFF_TAB::SET)
+            .into(),
+    );
 
     jpu.pic_size.write(
         MJPEG_PIC_SIZE::WIDTH.val(layout.aligned_width)
