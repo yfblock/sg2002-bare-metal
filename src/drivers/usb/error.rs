@@ -12,6 +12,10 @@ pub enum UsbError {
     Protocol(&'static str),
     /// 设备以 STALL 结束控制/批量事务。
     Stall,
+    /// 此处无设备/无接管:树遍历的"空枝"软信号(空端口、复位后未使能、
+    /// 子树无类驱动接管)。不是故障——遍历层跳过,仅在根/终点升格为
+    /// 带上下文的其他错误。
+    NotPresent,
 }
 
 pub type UsbResult<T> = Result<T, UsbError>;

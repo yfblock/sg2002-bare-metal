@@ -71,41 +71,41 @@ pub trait Hub {
     ///
     /// 序列:查连接 → [`Self::connect_reset_sequence`] → 复位后须 `ENABLE`
     /// → 在默认地址 0 上完成 `SET_ADDRESS`/`SET_CONFIGURATION`,产出
-    /// [`UsbDevice`](设备身份,含本端口速度)。端口空/未使能 = `Ok(None)`
-    /// (此枝无子节点,只记日志不报错);`Err` 仅复位或枚举硬失败。
+    /// [`UsbDevice`](设备身份,含本端口速度)。空口/未使能/端口级失败 =
+    /// `Err(NotPresent)`(空枝软信号,只记日志);其余 `Err` 为硬失败。
     ///
     /// 根口与外部 hub 端口走同一实现——树遍历(topology)对两者无差别。
-    fn enumerate_child(&self, port: u8, next_addr: &mut u8) -> UsbResult<Option<UsbDevice>> {
+    fn enumerate_child(&self, port: u8, next_addr: &mut u8) -> UsbResult<UsbDevice> {
         let w0 = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
                 log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} GET_PORT_STATUS: {:?}", port, e);
-                return Ok(None);
+                return Err(UsbError::NotPresent);
             }
         };
         if w0 & W0_CONNECTION == 0 {
             log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} empty (w0={:#06x})", port, w0);
-            return Ok(None);
+            return Err(UsbError::NotPresent);
         }
         if let Err(e) = self.connect_reset_sequence(port) {
             log::warn!(target: "sg200x_bsp::usb::topology", "[USB] port {} reset sequence: {:?}", port, e);
-            return Ok(None);
+            return Err(UsbError::NotPresent);
         }
         let after = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
                 log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} after-reset status: {:?}", port, e);
-                return Ok(None);
+                return Err(UsbError::NotPresent);
             }
         };
         if after & W0_ENABLE == 0 {
             log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} reset done but not enabled (w0={:#06x})", port, after);
-            return Ok(None);
+            return Err(UsbError::NotPresent);
         }
         let speed = PortSpeed::from_status(after);
         log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} enabled w0={:#06x} SPD={}",
             port, after, speed.as_str());
-        Ok(Some(enumerate_device(speed, next_addr)?))
+        Ok(enumerate_device(speed, next_addr)?)
     }
 }
 

@@ -32,8 +32,9 @@ macro_rules! topo_log {
 /// 分派一台已枚举的设备:
 ///
 /// - **Hub** → 转 [`walk_hub_ports`] 递归下探;
-/// - **功能设备** → 类驱动注册表匹配,被接管则 `Some` 上抛(先到先得)。
-fn dispatch_device(depth: u8, dev: UsbDevice, next_addr: &mut u8) -> UsbResult<Option<UsbDevice>> {
+/// - **功能设备** → 类驱动注册表匹配,被接管则上抛;无人接管 =
+///   `Err(NotPresent)`(空枝软信号)。
+fn dispatch_device(depth: u8, dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
     topo_log!(depth, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
         dev.vid, dev.pid, dev.dev_class);
 
@@ -50,20 +51,21 @@ fn dispatch_device(depth: u8, dev: UsbDevice, next_addr: &mut u8) -> UsbResult<O
         Some(driver) => {
             topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
                 driver.name(), dev.ep0.dev());
-            Ok(Some(dev))
+            Ok(dev)
         }
-        None => Ok(None),
+        None => Err(UsbError::NotPresent),
     }
 }
 
 /// 遍历一台 hub 的全部下游端口:供电 → 等稳定 → 逐口取子设备
 /// ([`Hub::enumerate_child`])并递归 [`dispatch_device`];返回子树被接管
-/// 的设备(多台先到先得)。单口失败只记日志跳过,不中断整树。
+/// 的设备(多台先到先得)。单口 NotPresent 只跳过不中断;子树无人
+/// 接管 = `Err(NotPresent)`。
 fn walk_hub_ports(
     depth: u8,
     hub_dev: &DeviceHub,
     next_addr: &mut u8,
-) -> UsbResult<Option<UsbDevice>> {
+) -> UsbResult<UsbDevice> {
     let nports = hub_dev.nports();
     topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
         nports, hub_dev.pwr_good_ms().max(20)); // 上电稳定时间给 ≥20ms 富余
@@ -79,13 +81,22 @@ fn walk_hub_ports(
 
     let mut claimed: Option<UsbDevice> = None;
     for port in 1..=nports {
-        let Some(child) = hub_dev.enumerate_child(port, next_addr)? else {
-            continue;
+        let child = match hub_dev.enumerate_child(port, next_addr) {
+            Ok(d) => d,
+            Err(UsbError::NotPresent) => continue, // 空口/端口级失败:跳过
+            Err(e) => return Err(e),               // 硬失败:中断整树
         };
-        let sub = dispatch_device(depth.saturating_add(1), child, next_addr)?;
-        claimed = claimed.or(sub); // 多台候选先到先得
+        match dispatch_device(depth.saturating_add(1), child, next_addr) {
+            Ok(d) => {
+                if claimed.is_none() {
+                    claimed = Some(d); // 多台候选先到先得
+                }
+            }
+            Err(UsbError::NotPresent) => {} // 子树无人接管:继续扫其他口
+            Err(e) => return Err(e),
+        }
     }
-    Ok(claimed)
+    claimed.ok_or(UsbError::NotPresent)
 }
 
 /// 树遍历整条总线：根口等连接 → 取根口子设备 → 分派;返回被类驱动接管的
@@ -99,10 +110,13 @@ pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
         ));
     }
     let mut next_addr: u8 = 1;
-    let child = root
-        .enumerate_child(1, &mut next_addr)?
-        .ok_or(UsbError::Protocol("root port child not enabled"))?;
+    let child = root.enumerate_child(1, &mut next_addr).map_err(|e| match e {
+        UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+        e => e,
+    })?;
     log::info!("[USB] topology: scan finished.");
-    dispatch_device(0, child, &mut next_addr)?
-        .ok_or(UsbError::Protocol("no device claimed by any class driver"))
+    dispatch_device(0, child, &mut next_addr).map_err(|e| match e {
+        UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
+        e => e,
+    })
 }
