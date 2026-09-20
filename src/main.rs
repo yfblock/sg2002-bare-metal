@@ -15,12 +15,10 @@
 //! │   ├── cache     D-cache 维护(DMA 一致性)
 //! │   └── time      rdtime/delay(Duration)/elapsed_since(25MHz timebase)
 //! ├── ipc.rs        大小核通信协议(DRAM 邮箱 ABI/帧通知/B2S 消息处理/pause-mute)
-//! ├── platform/     板级(SG2002):跨核 UART 控制台(打印+Dekker 行锁)、USB 平台初始化
-//! │   ├── uart      DW8250 寄存器访问 + 打印辅助 + 跨核行锁
-//! │   └── platform  USB PHY/时钟/VBUS/pinmux 初始化
+//! ├── logger.rs     跨核 UART 控制台(DW8250 + 打印 + Dekker 行锁)+ log 门面
 //! ├── yuv_buf.rs    共享 YUV/RGB 缓冲布局
-//! ├── logger.rs     log → UART 路由
 //! ├── panic.rs      panic handler
+//! ├── platform.rs   板级(SG2002):USB PHY/时钟/VBUS/pinmux 初始化
 //! └── drivers/      从 sg200x-bsp 迁移的硬件驱动
 //!     ├── soc       MMIO 基址常量
 //!     ├── mailbox   cvi 硬件邮箱控制器(门铃/认领/跨核锁槽)
@@ -61,7 +59,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
     // ---- trap 入口 + 基础初始化 ----
     unsafe { arch::trap::init_mtvec() };
     logger::init();
-    platform::uart::print("=== C906L UVC+JPU start ===\n");
+    logger::print("=== C906L UVC+JPU start ===\n");
     ipc::write(0, 0, 0);
     platform::platform_init();
     unsafe { arch::trap::init_interrupts() };
@@ -208,7 +206,7 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
 
     let kbps = if dt > 0 { st.byte_acc * crate::arch::time::TIMEBASE_HZ / dt / 1024 } else { 0 };
     let us = |t: u64| t * 1_000_000 / crate::arch::time::TIMEBASE_HZ / frames.max(1);
-    platform::uart::print_fmt(format_args!(
+    logger::print_fmt(format_args!(
         "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
          us{{cap={} dec={} ive={} hb={}}} \
          jpu{{inv1={} poll={} inv2={} cpy={} cln={}}} usbisr={} jpu_err={}\n",

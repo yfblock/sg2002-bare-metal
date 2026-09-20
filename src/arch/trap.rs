@@ -10,7 +10,7 @@ use riscv::register::mcause::Mcause;
 use riscv::register::mtvec::{self, Mtvec};
 
 use super::plic;
-use crate::platform::uart;
+use crate::logger;
 
 // trap 入口上下文块在 asm.S(_trap_entry,经 asm.rs 的 global_asm! 引入)。
 extern "C" {
@@ -62,12 +62,12 @@ extern "C" fn rust_trap_handler(mcause: Mcause, cur_sp: usize) -> usize {
             let mepc = riscv::register::mepc::read();
             let mtval = riscv::register::mtval::read();
             // 故障信息优先于锁:try 一次,拿不到也硬打(乱码可忍,丢 fault 不可忍)
-            let _lk = uart::line_lock_try();
-            uart::print_fmt_nolock(format_args!(
+            let _lk = logger::line_lock_try();
+            logger::print_fmt_nolock(format_args!(
                 "\n!!! C906L FAULT: mcause={:#x} mepc={:#x} mtval={:#x} !!!\n",
                 mcause.bits() as u64, mepc as u64, mtval as u64));
             if _lk {
-                uart::line_unlock();
+                logger::line_unlock();
             }
             loop {
                 riscv::asm::wfi();

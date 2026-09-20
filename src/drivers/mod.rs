@@ -3,7 +3,7 @@
 //! 模块与 sg200x-bsp 一一对应,只保留 bare-metal 实际用到的部分:
 //! soc(基址)、pinmux、gpio、mailbox(硬件邮箱)、USB 主机栈(DWC2+UVC)、JPU、IVE。
 //! (cache/延时等架构原语在 [`crate::arch`];UART 控制台含寄存器访问在
-//! [`crate::platform::uart`]——单消费者,不设独立驱动层。)
+//! [`crate::logger`]——单消费者,不设独立驱动层。)
 
 pub mod soc;
 pub mod pinmux;

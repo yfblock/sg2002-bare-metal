@@ -24,7 +24,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use crate::drivers::jpu::JpuDecoder;
 
-use crate::platform::uart;
+use crate::logger;
 use crate::yuv_buf;
 
 /// JPU DMA 内存池物理地址。YUV 缓冲之后，避免重叠。
@@ -66,13 +66,13 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
     if cell.is_none() {
         match create_decoder() {
             Ok(d) => {
-                uart::print("[JPU] decoder initialized\n");
+                logger::print("[JPU] decoder initialized\n");
                 *cell = Some(d);
             }
             Err(e) => {
-                uart::print("[JPU] init failed: ");
-                uart::print(e);
-                uart::print("\n");
+                logger::print("[JPU] init failed: ");
+                logger::print(e);
+                logger::print("\n");
                 return Err(e);
             }
         }
@@ -90,15 +90,15 @@ pub fn decode_to_shared(jpeg: &[u8]) -> Result<(u32, u32, usize), &'static str> 
             let n = RESET_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             // 节流：第 1、每 16 次打印一次，避免冲掉大核串口。
             if n == 1 || n % 16 == 0 {
-                uart::print_fmt(format_args!("[JPU] decode err={e} reset#{n:#x}\n"));
+                logger::print_fmt(format_args!("[JPU] decode err={e} reset#{n:#x}\n"));
             }
             *cell = None; // drop 旧 decoder（释放 stream/frame buf）
             match create_decoder() {
                 Ok(d) => *cell = Some(d),
                 Err(re_err) => {
-                    uart::print("[JPU] re-init failed: ");
-                    uart::print(re_err);
-                    uart::print("\n");
+                    logger::print("[JPU] re-init failed: ");
+                    logger::print(re_err);
+                    logger::print("\n");
                 }
             }
             Err(e)
