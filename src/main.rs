@@ -94,11 +94,11 @@ pub(crate) extern "C" fn rust_main() -> ! {
 /// FPS 报告间隔(帧数)
 const FPS_REPORT_EVERY: u32 = 100;
 
-/// 采集/处理 统计(单核,不需要原子)
+/// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
 struct PipelineStats {
-    tick_cap: u64,
-    tick_dec: u64,
-    tick_ive: u64,
+    cap: core::time::Duration,
+    dec: core::time::Duration,
+    ive: core::time::Duration,
     byte_acc: u64,
     fps_mark_frame: u32,
     fps_mark_time: u64,
@@ -107,9 +107,9 @@ struct PipelineStats {
 impl PipelineStats {
     fn new() -> Self {
         Self {
-            tick_cap: 0,
-            tick_dec: 0,
-            tick_ive: 0,
+            cap: core::time::Duration::ZERO,
+            dec: core::time::Duration::ZERO,
+            ive: core::time::Duration::ZERO,
             byte_acc: 0,
             fps_mark_frame: 0,
             fps_mark_time: crate::arch::time::rdtime(),
@@ -134,7 +134,7 @@ fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
         match uvc::uvc_capture_one_frame(ep0, sel) {
             Ok(n) => {
                 frame_count = frame_count.wrapping_add(1);
-                st.tick_cap += crate::arch::time::rdtime().wrapping_sub(t_cap0);
+                st.cap += crate::arch::time::elapsed_since(t_cap0);
                 st.byte_acc += uvc::take_frame_bytes().max(n as u32) as u64;
 
                 // ---- decode + notify ----
@@ -165,7 +165,7 @@ fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) 
 
     let t_dec0 = crate::arch::time::rdtime();
     let decoded = jpu::decode_to_shared(jpeg);
-    st.tick_dec += crate::arch::time::rdtime().wrapping_sub(t_dec0);
+    st.dec += crate::arch::time::elapsed_since(t_dec0);
 
     match decoded {
         Ok((w, h, len)) => {
@@ -179,7 +179,7 @@ fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) 
                 r_pa, g_pa, b_pa, w, w, h,
             ) {
             }
-            st.tick_ive += crate::arch::time::rdtime().wrapping_sub(t_ive0);
+            st.ive += crate::arch::time::elapsed_since(t_ive0);
 
             let reported = len.min(yuv_buf::YUV_BUF_SIZE);
             let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
@@ -205,11 +205,8 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
     } else { 0 };
 
     let kbps = if dt > 0 { st.byte_acc * crate::arch::time::TIMEBASE_HZ / dt / 1024 } else { 0 };
-    let us = |t: u64| t * 1_000_000 / crate::arch::time::TIMEBASE_HZ / frames.max(1);
-    let us_step = |s: u32| {
-        let total = crate::drivers::jpu::trace::take_step_time(s);
-        (total / (frames.max(1) as u32)).as_micros() as u64
-    };
+    // Duration → 每帧均值(µs);被统计的 Duration 在各实参处显式可见
+    let per_frame = |d: core::time::Duration| (d / (frames.max(1) as u32)).as_micros() as u64;
     logger::print_fmt(format_args!(
         "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
          us{{cap={} dec={} ive={} hb={}}} \
@@ -219,23 +216,28 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
         fps_x100 % 100,
         st.byte_acc / frames.max(1),
         kbps,
-        us(st.tick_cap),
-        us(st.tick_dec),
-        us(st.tick_ive),
+        per_frame(st.cap),
+        per_frame(st.dec),
+        per_frame(st.ive),
         // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
         unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) },
-        us_step(crate::drivers::jpu::trace::step::INV_FRAME),
-        us_step(crate::drivers::jpu::trace::step::POLL),
-        us_step(crate::drivers::jpu::trace::step::INV_AFTER),
-        us_step(crate::drivers::jpu::trace::step::COPY_STREAM),
-        us_step(crate::drivers::jpu::trace::step::CLEAN_STREAM),
+        per_frame(crate::drivers::jpu::trace::take_step_time(
+            crate::drivers::jpu::trace::step::INV_FRAME)),
+        per_frame(crate::drivers::jpu::trace::take_step_time(
+            crate::drivers::jpu::trace::step::POLL)),
+        per_frame(crate::drivers::jpu::trace::take_step_time(
+            crate::drivers::jpu::trace::step::INV_AFTER)),
+        per_frame(crate::drivers::jpu::trace::take_step_time(
+            crate::drivers::jpu::trace::step::COPY_STREAM)),
+        per_frame(crate::drivers::jpu::trace::take_step_time(
+            crate::drivers::jpu::trace::step::CLEAN_STREAM)),
         crate::drivers::usb::dwc2::take_usb_isr_count(),
         jpu::reset_count(),
     ));
 
-    st.tick_cap = 0;
-    st.tick_dec = 0;
-    st.tick_ive = 0;
+    st.cap = core::time::Duration::ZERO;
+    st.dec = core::time::Duration::ZERO;
+    st.ive = core::time::Duration::ZERO;
     st.byte_acc = 0;
     st.fps_mark_frame = frame_count;
     st.fps_mark_time = now;
