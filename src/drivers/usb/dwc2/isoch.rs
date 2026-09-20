@@ -62,10 +62,9 @@ impl IsochInEp {
     /// # 参数
     /// - `dma_off`：本微帧接收缓冲在内部 DMA 窗口中的起始偏移。
     pub fn read_uframe(&self, dma_off: usize) -> UsbResult<usize> {
-        let (dev, ep, mps_raw) = (self.dev, self.ep_num, self.mps_raw);
-        let mps = wmax_mps(mps_raw);
-        let mult = wmax_mult(mps_raw);
-        if mps == 0 || mult == 0 || mult > 3 {
+        let mps = wmax_mps(self.mps_raw);
+        let mult = wmax_mult(self.mps_raw);
+        if mps == 0 || mult > 3 {
             return Err(UsbError::Protocol("bad isoch mps_raw"));
         }
         let xfersize = mps.saturating_mul(mult);
@@ -80,13 +79,13 @@ impl IsochInEp {
         let pktcnt = mult;
 
         unsafe {
-            let hc_base = hcchar_isoch(dev, ep, mps, mult, true);
+            let hc_base = hcchar_isoch(self.dev, self.ep_num, mps, mult, true);
             let tsiz = hctsiz(pid, pktcnt, xfersize);
 
             let ch = Channel::VIDEO;
             let chan = ch.chan_regs();
             ch.wait_disabled()?;
-            ch.halt();
+            // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
             chan.hcsplt.set(0);
             chan.hcint.set(HCINT_ALL_W1C);
             chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);

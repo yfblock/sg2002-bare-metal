@@ -3,7 +3,7 @@
 //! 通道约定：**0 = EP0 控制**，**1 = Isoch 视频**。
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
+use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
 
 use super::regs::{Dwc2HostChannel, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
@@ -13,11 +13,6 @@ use tock_registers::fields::FieldValue;
 
 /// `HCINT` 快照（通道 halt 时读出的中断原因位，供上层区分 XFERCOMPL / NAK / STALL 等）。
 pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
-
-#[inline]
-pub(crate) fn channel(ch: u32) -> &'static Dwc2HostChannel {
-    usb::dwc2_channel(ch)
-}
 
 /// 主机通道句柄：绑定通道索引。约定 **0 = EP0 控制**、**1 = Isoch 视频**
 /// ——「一条端点 ↔ 一个硬件通道」由端点句柄（[`super::Ep0`] / [`super::IsochInEp`]）
@@ -56,7 +51,7 @@ pub fn handle_usb_irq() {
         if haint & (1 << ch) == 0 {
             continue;
         }
-        let chan = channel(ch);
+        let chan = usb::dwc2_channel(ch);
         let hcint = chan.hcint.extract();
         // 清掉本通道所有中断位（W1C）
         chan.hcint.set(hcint.get());
@@ -85,7 +80,7 @@ impl Channel {
     /// 通道寄存器视图。
     #[inline]
     pub(crate) fn chan_regs(&self) -> &'static Dwc2HostChannel {
-        channel(self.0)
+        usb::dwc2_channel(self.0)
     }
 
     /// 等通道空闲（`CHENA` 自清）。
@@ -100,21 +95,6 @@ impl Channel {
         Err(UsbError::Timeout)
     }
 
-    /// 若通道仍忙，按 Linux `dwc2_hc_halt` 同时置 `CHENA|CHDIS` 请求停止。
-    pub(crate) fn halt(&self) {
-        let chan = self.chan_regs();
-        if !chan.hcchar.is_set(HCCHAR::CHENA) {
-            return;
-        }
-        chan.hcchar.modify(HCCHAR::CHENA::SET + HCCHAR::CHDIS::SET);
-        for _ in 0..500_000u32 {
-            if !chan.hcchar.is_set(HCCHAR::CHENA) {
-                return;
-            }
-            spin_delay(8);
-        }
-    }
-
     /// 等通道 halt。中断 flag 优先，`spin_delay` 轮询兜底。
     ///
     /// 两条路径都留着是因为 PLIC source 30 在 C906L 上触发率很低——
@@ -124,15 +104,11 @@ impl Channel {
         let chan = self.chan_regs();
         let idx = self.0 as usize;
         for _ in 0..8_000_000u32 {
-            // 中断路径：USB ISR 设了 CH_DONE
-            if CH_DONE[idx].swap(false, Ordering::AcqRel) {
-                let hi = chan.hcint.extract();
-                chan.hcint.set(hi.get());
-                return Ok(hi);
-            }
-            // 轮询兜底。实测 PLIC source 30 覆盖率不足 1%，绝大多数传输走这里。
+            // 中断 flag（USB ISR 置 CH_DONE）优先，轮询 CHHLTD 兜底；
+            // HCINT 的 W1C 只在返回路径写回一次。
+            let done = CH_DONE[idx].swap(false, Ordering::AcqRel);
             let hi = chan.hcint.extract();
-            if hi.is_set(HCINT::CHHLTD) {
+            if done || hi.is_set(HCINT::CHHLTD) {
                 chan.hcint.set(hi.get());
                 return Ok(hi);
             }
@@ -159,7 +135,7 @@ impl Channel {
         let hc_value = (hcchar + HCCHAR::CHENA::SET).value;
         for attempt in 0..=NAK_RETRIES {
             self.wait_disabled()?;
-            self.halt();
+            // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
             chan.hcsplt.set(0);
             chan.hcint.set(HCINT_ALL_W1C);
             chan.hcintmsk
@@ -180,8 +156,8 @@ impl Channel {
                     return Err(UsbError::Protocol("ch xfer error (XACT)"));
                 }
                 xact_left -= 1;
-                // XACTERR 退避更久（让 D+/D- 稳定再试），约 1ms。
-                spin_delay(2_000_000);
+                // XACTERR 退避 1ms（让 D+/D- 稳定再试）。
+                crate::arch::time::delay(core::time::Duration::from_millis(1));
                 continue;
             }
             if st.is_set(HCINT::NAK) {
@@ -190,8 +166,8 @@ impl Channel {
                     self.0, hc_value, hctsiz, dmap, st.get());
                     return Err(UsbError::Protocol("ch xfer NAK exhausted"));
                 }
-                // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF），这里用粗粒度 spin。
-                spin_delay(200_000);
+                // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF）。
+                crate::arch::time::delay(core::time::Duration::from_millis(1));
                 continue;
             }
             if !st.is_set(HCINT::XFERCOMPL) {
@@ -211,9 +187,9 @@ pub(crate) fn hcchar_control(
     mps: u32,
     dir_in: bool,
 ) -> FieldValue<u32, HCCHAR::Register> {
-    let mut field = HCCHAR::MPS.val(mps & 0x7ff)
-        + HCCHAR::EPNUM.val(ep & 0xf)
-        + HCCHAR::DEVADDR.val(dev & 0x7f)
+    let mut field = HCCHAR::MPS.val(mps)
+        + HCCHAR::EPNUM.val(ep)
+        + HCCHAR::DEVADDR.val(dev)
         + HCCHAR::EPTYPE::Control;
     if dir_in {
         field = field + HCCHAR::EPDIR::SET;
@@ -228,11 +204,11 @@ pub(crate) fn hcchar_isoch(
     mult: u32,
     dir_in: bool,
 ) -> FieldValue<u32, HCCHAR::Register> {
-    let mut field = HCCHAR::MPS.val(mps & 0x7ff)
-        + HCCHAR::EPNUM.val(ep & 0xf)
-        + HCCHAR::DEVADDR.val(dev & 0x7f)
+    let mut field = HCCHAR::MPS.val(mps)
+        + HCCHAR::EPNUM.val(ep)
+        + HCCHAR::DEVADDR.val(dev)
         + HCCHAR::EPTYPE::Isochronous
-        + HCCHAR::MC.val(mult.clamp(1, 3) & 0x3);
+        + HCCHAR::MC.val(mult.clamp(1, 3));
     if dir_in {
         field = field + HCCHAR::EPDIR::SET;
     }
@@ -254,25 +230,9 @@ pub(crate) fn hctsiz(pid: FieldValue<u32, HCTSIZ::Register>, pktcnt: u32, xfersi
     (pid + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize)).value
 }
 
-/// 计算 `HCTSIZ.PKTCNT`：按 `mps` 分包后的包数（至少为 1）///
-/// # 参数
-/// - `mps`：端点最大包长（字节），为 0 时按 1 包处理。
-/// - `nbytes`：本段传输总字节数。
-pub(crate) fn pktcnt_for(mps: u32, nbytes: u32) -> u32 {
-    if mps == 0 {
-        return 1;
-    }
-    nbytes.div_ceil(mps)
-}
-
 /// `SET_ADDRESS` 后延时，满足 USB 2.0 在下一事务前使用新地址的要求
 /// （设备侧恢复，Linux 主机栈常用 ~10ms，这里给 50ms 富余；
 /// 原迭代计数版按 1GHz 校准，25MHz 上实测 ~27s 纯属过杀）。
 pub fn usb_post_set_address_delay() {
     crate::arch::time::delay(core::time::Duration::from_millis(50));
-}
-
-/// Hub 下游端口 `PORT_RESET` 后给设备恢复时间（TDRSTR 后的 TRSTRCY 稳定，100ms 富余）。
-pub fn usb_post_hub_port_reset_delay() {
-    crate::arch::time::delay(core::time::Duration::from_millis(100));
 }

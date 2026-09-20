@@ -1,6 +1,6 @@
 //! D-Cache 维护（DMA 一致性契约）。riscv64 + T-Head C906 自定义缓存指令。
 //!
-//! C906 使用非标缓存指令（`dcache.cva/iva/ciall`，`.insn` 编码），与标准
+//! C906 使用非标缓存指令（`dcache.cva/iva`，`.insn` 编码），与标准
 //! Zicbom 编码空间重叠——同时启用会因 binutils 解码歧义直接 `compile_error!`。
 //! USB/JPU 的 DMA 缓冲都靠这里的 clean/invalidate 保证与 CPU 视图一致。
 
@@ -11,7 +11,7 @@ const CACHE_LINE: usize = 64;
 #[cfg(target_feature = "zicbom")]
 compile_error!("RISC-V `zicbom` 标准缓存指令与 C906 自定义编码冲突，请关闭 zicbom。");
 
-// (1) 按行精细维护：dcache.cva / dcache.iva（C906 非标指令）
+// 按行精细维护：dcache.cva / dcache.iva（C906 非标指令）
 
 #[inline(always)]
 unsafe fn dcache_cva(va: usize) {
@@ -59,25 +59,12 @@ pub fn dcache_invalidate_range(start: usize, size: usize) {
     riscv::asm::fence();
 }
 
-// (2) 粗粒度 DMA 一致性：dcache.ciall 全清
-
-/// `dcache.ciall` 清洗并无效全部 D-Cache（与 ArceOS `dma.md` 示例一致）。
-#[inline(always)]
-unsafe fn dcache_ciall() {
-    unsafe {
-        core::arch::asm!(
-            ".long 0x0030000b",
-            "fence rw, rw",
-            options(nostack),
-        );
-    }
+/// USB DWC2 通过 `HCDMA` 访问内存：缓冲区须在 **DMA 可见** 的相干视图上；
+/// 按缓冲区实际范围 clean（调用方多为 8-1024B 的 EP0 小缓冲，不值得全 cache flush）。
+pub unsafe fn dcache_clean_for_dma(ptr: *const u8, len: usize) {
+    dcache_clean_range(ptr as usize, len)
 }
 
-/// USB DWC2 通过 `HCDMA` 访问内存：缓冲区须在 **DMA 可见** 的相干视图上；C906 上须 flush。
-pub unsafe fn dcache_clean_for_dma(_ptr: *const u8, _len: usize) {
-    unsafe { dcache_ciall() }
-}
-
-pub unsafe fn dcache_invalidate_after_dma(_ptr: *mut u8, _len: usize) {
-    unsafe { dcache_ciall() }
+pub unsafe fn dcache_invalidate_after_dma(ptr: *mut u8, len: usize) {
+    dcache_invalidate_range(ptr as usize, len)
 }

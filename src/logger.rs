@@ -42,8 +42,6 @@ register_structs! {
     }
 }
 
-/// UART0 MMIO 基址。
-
 /// 取 UART0 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
 fn uart_regs() -> &'static Dw8250Uart {

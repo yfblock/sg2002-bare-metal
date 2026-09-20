@@ -11,7 +11,7 @@ pub mod regs;
 pub use decoder::JpuDecoder;
 
 mod session;
-pub use session::{decode_to_shared, reset_count};
+pub use session::{decode_to_shared, take_reset_count};
 
 /// `UnsafeCell` + `Sync`：裸机单核安全持有可变全局。
 pub(crate) struct SyncUnsafeCell<T>(pub(crate) core::cell::UnsafeCell<T>);
@@ -30,18 +30,18 @@ pub mod trace {
     use core::sync::atomic::{AtomicU64, Ordering};
     use core::time::Duration;
 
-    /// 步号（仅保留 \[FPS\] 报告实际读取的 5 步）。
+    /// 步号（\[FPS\] 报告实际读取的 5 步，紧密编号 0..=4 对齐 `STEP_NANOS` 下标）。
     pub mod step {
-        pub const COPY_STREAM: u32 = 3;
-        pub const CLEAN_STREAM: u32 = 4;
-        pub const INV_FRAME: u32 = 8;
-        pub const POLL: u32 = 14;
-        pub const INV_AFTER: u32 = 15;
+        pub const COPY_STREAM: u32 = 0;
+        pub const CLEAN_STREAM: u32 = 1;
+        pub const INV_FRAME: u32 = 2;
+        pub const POLL: u32 = 3;
+        pub const INV_AFTER: u32 = 4;
     }
 
     /// 各步累计耗时（纳秒——Duration 的原子存储基元），下标见 `step`。
     /// 只累加不打印;u64 纳秒容量 ~584 年,累加窗口内不溢出。
-    static STEP_NANOS: [AtomicU64; 17] = [const { AtomicU64::new(0) }; 17];
+    static STEP_NANOS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
 
     /// 取走并清零某步的累计耗时。
     pub fn take_step_time(step: u32) -> Duration {

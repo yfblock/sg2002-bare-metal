@@ -32,6 +32,6 @@ register_structs! {
 
 /// 取 FMUX 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
-pub fn regs() -> &'static FmuxRegs {
+pub(crate) fn pinmux_regs() -> &'static FmuxRegs {
     unsafe { &*(FMUX_BASE as *const FmuxRegs) }
 }

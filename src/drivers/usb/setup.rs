@@ -6,12 +6,9 @@
 //! 类专用 SETUP 见各类：UVC 的 VS 控制在 [`crate::drivers::usb::uvc::setup`]。
 //! （MSC 等 Bulk 类协议未移植本树，需要时见 sg200x-bsp。）
 
-/// 构造标准 `GET_DESCRIPTOR(Device)` 的 8 字节 SETUP。
-///
-/// # 参数
-/// - `w_length`：数据阶段主机希望读取的字节数（常见先读 8 再读 18）。
+/// 构造标准 `GET_DESCRIPTOR(Device)` 的 8 字节 SETUP（`wLength` 固定 18 = 整份设备描述符）。
 #[inline]
-pub fn get_descriptor_device(w_length: u16) -> [u8; 8] {
+pub fn get_descriptor_device() -> [u8; 8] {
     [
         0x80, // bmRequestType: Dir IN, Type Standard, Recipient Device
         6,    // GET_DESCRIPTOR
@@ -19,8 +16,7 @@ pub fn get_descriptor_device(w_length: u16) -> [u8; 8] {
         0x01, // wValue: DEVICE (high) index 0 (low)
         0x00,
         0x00, // wIndex
-        w_length as u8,
-        (w_length >> 8) as u8,
+        18, 0, // wLength
     ]
 }
 
@@ -110,6 +106,8 @@ pub const HUB_PORT_FEATURE_C_RESET: u16 = 20;
 
 /// `USB_DT_CONFIGURATION`（`GET_DESCRIPTOR` 高字节）。
 pub const USB_DT_CONFIGURATION: u8 = 2;
+/// `USB_DT_INTERFACE`（接口描述符的 `bDescriptorType`）。
+pub const USB_DT_INTERFACE: u8 = 4;
 /// Hub 类描述符类型（`GET_DESCRIPTOR` 高字节）。
 pub const USB_DT_HUB: u8 = 0x29;
 /// 接口类：Video。
@@ -117,7 +115,6 @@ pub const USB_CLASS_VIDEO: u8 = 0x0e;
 
 /// 构造 `GET_DESCRIPTOR(Configuration)` — 对**已分配地址**的设备使用。
 ///
-/// # 参数
 /// - `cfg_index`：配置描述符索引（通常为 0）。
 /// - `w_length`：希望读回的字节数（可先读 9 字节头再按 `wTotalLength` 读全）。
 #[inline]

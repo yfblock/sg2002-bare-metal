@@ -1,7 +1,7 @@
 //! EP0 控制传输：`Ep0` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
-use super::ch::{hcchar_control, hctsiz, pktcnt_for, Channel};
+use super::ch::{hcchar_control, hctsiz, Channel};
 use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::HCTSIZ;
 use crate::arch::cache;
@@ -40,7 +40,7 @@ impl Ep0 {
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         unsafe {
             let wlen: u16 = 18;
-            let setup_pkt = setup::get_descriptor_device(wlen);
+            let setup_pkt = setup::get_descriptor_device();
             core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
             cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
 
@@ -132,14 +132,13 @@ impl Ep0 {
             let mut data1 = true;
             while left > 0 {
                 let chunk = left.min(mps);
-                let pkts = pktcnt_for(mps, chunk);
                 hc = hcchar_control(dev, 0, mps, true);
                 let pid = if data1 {
                     HCTSIZ::PID::Data1
                 } else {
                     HCTSIZ::PID::Data0
                 };
-                Channel::CONTROL.xfer(hc, hctsiz(pid, pkts, chunk), DMA_OFF_SMALL_IO as u32)?;
+                Channel::CONTROL.xfer(hc, hctsiz(pid, 1, chunk), DMA_OFF_SMALL_IO as u32)?;
                 cache::dcache_invalidate_after_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
                 core::ptr::copy_nonoverlapping(
                     dma_ptr().add(DMA_OFF_SMALL_IO),
@@ -179,7 +178,6 @@ impl Ep0 {
             let mut data1 = true;
             while left > 0 {
                 let chunk = left.min(mps);
-                let pkts = pktcnt_for(mps, chunk);
                 core::ptr::copy_nonoverlapping(
                     data.as_ptr().add(src),
                     dma_ptr().add(DMA_OFF_SMALL_IO),
@@ -192,7 +190,7 @@ impl Ep0 {
                 } else {
                     HCTSIZ::PID::Data0
                 };
-                Channel::CONTROL.xfer(hc, hctsiz(pid, pkts, chunk), DMA_OFF_SMALL_IO as u32)?;
+                Channel::CONTROL.xfer(hc, hctsiz(pid, 1, chunk), DMA_OFF_SMALL_IO as u32)?;
                 src += chunk as usize;
                 left -= chunk;
                 data1 = !data1;

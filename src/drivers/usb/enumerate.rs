@@ -7,12 +7,13 @@ use crate::drivers::usb::dwc2::{self, regs::HPRT0};
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::topology::{self, UvcEnumerated};
 
-/// 初始化主机并做拓扑扫描。
-pub fn enumerate_topology_only() -> UsbResult<UvcEnumerated> {
+/// 初始化主机并枚举摄像头：经 hub **递归遍历整条总线**，对每台设备做
+/// `SET_ADDRESS`/`SET_CONFIGURATION`，返回扫描到的 UVC 摄像头。
+pub fn enumerate_camera() -> UsbResult<UvcEnumerated> {
     dwc2::dwc2_host_init()?;
     check_root_device_connected()?;
-    dwc2::dwc2_host_root_bus_reset_pulse()?;
-    topology::enumerate_bus_print_tree_only()
+    dwc2::dwc2_host_root_bus_reset_pulse();
+    topology::enumerate_bus()
 }
 
 /// 轮询 `HPRT0.CONNSTS`，直到根口报告已连接设备或超时。

@@ -133,8 +133,8 @@ register_structs! {
         (0x213c => pub out_y_pitch: ReadWrite<u32>),
         (0x2140 => pub out_c_pitch: ReadWrite<u32>),
         (0x2144 => _reserved2144),
-        (0x2148 => pub out_w_m1: ReadWrite<u32>),
-        (0x214c => pub out_h_m1: ReadWrite<u32>),
+        (0x2148 => pub out_w_m1: ReadWrite<u32, TopSize::Register>),
+        (0x214c => pub out_h_m1: ReadWrite<u32, TopSize::Register>),
         (0x2150 => _reserved2150: [u32; 17]),
         /* ---- FILTEROP CSC ---- */
         (0x2194 => pub coef_upd: ReadWrite<u32, CoefUpd::Register>),
@@ -182,8 +182,8 @@ pub fn set_input_fmt(fmt: u32) {
     FMT_SEL_OVERRIDE.store(fmt, Ordering::Relaxed);
 }
 
-/// 读当前生效的 `fmt_sel`。
-pub fn input_fmt() -> u32 {
+/// 读当前生效的 `fmt_sel`（模块内供 `csc_yuv420_to_rgb888` 使用）。
+fn input_fmt() -> u32 {
     match FMT_SEL_OVERRIDE.load(Ordering::Relaxed) {
         u32::MAX => ImgInCtrl::FMT_SEL::YUV420P.value,
         v => v & 0xF,
@@ -267,8 +267,8 @@ pub fn csc_yuv420_to_rgb888(
     // 9. 输出 DMA 配置
     reg.out_y_pitch.set(r_pitch);
     reg.out_c_pitch.set(r_pitch);
-    reg.out_w_m1.set(wm1 & 0xFFF);
-    reg.out_h_m1.set(hm1 & 0xFFF);
+    reg.out_w_m1.write(TopSize::W_M1.val(wm1));
+    reg.out_h_m1.write(TopSize::H_M1.val(hm1));
     write_base(&reg.r_base_lo, &reg.r_base_hi, r_pa as u64);
     write_base(&reg.g_base_lo, &reg.g_base_hi, g_pa as u64);
     write_base(&reg.b_base_lo, &reg.b_base_hi, b_pa as u64);
@@ -276,16 +276,13 @@ pub fn csc_yuv420_to_rgb888(
         OdmaCtrl::FMT_SEL::RGB888_PLANAR + OdmaCtrl::DMA_BLEN.val(1) + OdmaCtrl::DMA_EN::SET,
     );
 
-    // 10. Y/C WDMA 禁用（CSC 走 ODMA）
-    reg.fop_en.set(0);
-
-    // 11. 清中断状态/使能（不用中断），fmt_vld_fg = 1 启动。
+    // 10. 清中断状态/使能（不用中断），fmt_vld_fg = 1 启动。
     // （旧代码还向 RO 的 top_status 写 0，无操作意义，已略。）
     reg.top_int_st.set(0);
     reg.top_int_en.set(0);
     reg.top_ctrl1.write(TopCtrl1::FMT_VLD_FG::SET);
 
-    // 12. 轮询完成（top_status 任意 done bit 置位即完成；上限 1s）
+    // 11. 轮询完成（top_status 任意 done bit 置位即完成；上限 1s）
     let t0 = rdtime();
     let timeout = Duration::from_millis(1_000);
     loop {

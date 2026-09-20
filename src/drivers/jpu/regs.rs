@@ -159,7 +159,8 @@ register_structs! {
     }
 }
 
-/// 取 JPU 寄存器视图（[`crate::drivers::gpio::GPIO::new`] 同款：由调用方传入已映射的 MMIO 基址）。
+/// 取 JPU 寄存器视图（基址为编译期常量 [`crate::platform::JPU_REG_BASE`]，
+/// 小核 identity 映射下恒有效，无需参数）。
 #[inline]
 pub fn jpu_regs() -> &'static JpuRegisters {
     unsafe { &*(JPU_REG_BASE as *const JpuRegisters) }
@@ -169,8 +170,7 @@ pub fn jpu_regs() -> &'static JpuRegisters {
 /// 设时钟/复位/VC，但**不设 VD_REMAP**。
 /// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr\[39:32\]），
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
-/// 小核 identity 映射（VA=PA），不需要地址扩展。
-pub fn hardware_init_no_vd_remap() {
+pub fn hardware_init() {
     let top = crate::platform::top();
     // JPEG 时钟使能 + 复位释放(TOP 寄存器,soc.rs TopRegs 视图)
     top.clk_jpeg.set(top.clk_jpeg.get() | 0x3300); // RMW: OR JPEG 时钟使能
@@ -197,7 +197,7 @@ pub fn hardware_init_no_vd_remap() {
 ///
 /// 只动 JPEG 的时钟/复位位和 VC 使能，**不写** `TOP_DDR_ADDR_MODE_OFF`
 /// （那会改 DDR 地址映射把大核搞崩）。
-pub fn hard_reset_at() {
+pub fn hard_reset() {
     let top = crate::platform::top();
     // 1) 拉低复位(清 JPEG release 位)
     top.rst.modify(crate::platform::TOP_RST::JPEG::CLEAR);
@@ -218,7 +218,7 @@ pub fn clear_pic_status(status: u32) {
 #[inline]
 /// 等待软复位完成。按时间设上限（10ms 足够）——次数上限的实际时长取决于主频
 /// 和循环开销，在小核上会长到不可接受，见 [`crate::arch::time`]。
-pub fn wait_sw_reset_done() {
+fn wait_sw_reset_done() {
     let regs = jpu_regs();
     regs.pic_start.write(MJPEG_PIC_START::START_INIT::SET);
     let t0 = rdtime();

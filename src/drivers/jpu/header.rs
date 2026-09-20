@@ -115,10 +115,6 @@ const DQT_TABLE_ENTRIES: usize = 64;
 const HUFF_NO_CODE: u32 = 0xFFFF;
 /// 无效霍夫曼值指针哨兵
 const HUFF_NO_PTR: u8 = 0xFF;
-/// 负系数时 JPU 寄存器高位的全 1 填充(16-bit 系数 / 8-bit 系数装 24-bit 字段)
-const NEG_FILL_16: u32 = 0xFFFF;
-const NEG_FILL_24: u32 = 0xFFFFFF;
-
 /// 霍夫曼表槽的 JPU 排布:slot bit1 = Th 低位、bit0 = Tc 低位(厂商驱动同款映射)
 fn huff_slot(tc: u8, th: u8) -> usize {
     (((th & 1) << 1) | (tc & 1)) as usize
@@ -179,24 +175,6 @@ impl HuffTable {
             min_codes: [HUFF_NO_CODE; HUFF_LENGTH_COUNT],
             max_codes: [HUFF_NO_CODE; HUFF_LENGTH_COUNT],
             ptrs: [HUFF_NO_PTR; HUFF_LENGTH_COUNT],
-        }
-    }
-
-    /// 16-bit 系数的负值填充:最高位为 1 时高位全 1(T.81 F.2.2 EXTEND 语义)。
-    pub fn sign_extend_16(huff_data: u32) -> u32 {
-        if huff_data & 0x8000 != 0 {
-            NEG_FILL_16
-        } else {
-            0
-        }
-    }
-
-    /// 8-bit 系数的负值填充:最高位为 1 时 24-bit 字段高位全 1。
-    pub fn sign_extend_8(huff_data: u32) -> u32 {
-        if huff_data & 0x80 != 0 {
-            NEG_FILL_24
-        } else {
-            0
         }
     }
 

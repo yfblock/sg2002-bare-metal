@@ -4,7 +4,6 @@ use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup;
 
-use super::capture::{reset_frame_continuity, CAPTURE_UNCOMPRESSED};
 use super::descriptor::{reselect_isoch_alt_for_payload, UvcStreamSelection};
 use super::setup::{uvc_get_cur_vs, uvc_get_max_vs, uvc_set_cur_vs};
 
@@ -51,12 +50,9 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 
 /// `PROBE` → `GET_CUR` → `COMMIT` → `SET_INTERFACE`。
 ///
-/// 协商后会更新 `sel.negotiated_payload_size` 与 `sel.negotiated_frame_size`，并依据
+/// 协商后会更新 `sel.negotiated_payload_size`，并依据
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
 pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> UsbResult<()> {
-    reset_frame_continuity();
-    // 帧组装按格式分流：MJPEG 认 SOI/EOI，Uncompressed 只认 FID/EOF。
-    CAPTURE_UNCOMPRESSED.store(!sel.is_mjpeg, core::sync::atomic::Ordering::Relaxed);
     let _ = ep.write_no_data(setup::set_interface(0, sel.vs_interface));
 
     let probe_init = build_probe_commit_payload(sel);
@@ -86,7 +82,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     dump_probe("PROBE.CUR", &probe);
 
     sel.negotiated_payload_size = u32::from_le_bytes([probe[22], probe[23], probe[24], probe[25]]);
-    sel.negotiated_frame_size = u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
+    let negotiated_frame_size = u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
 
     // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt。
     reselect_isoch_alt_for_payload(sel);
@@ -110,7 +106,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     ep.write_no_data(setup::set_interface(sel.alt_setting, sel.vs_interface))?;
 
     log::info!("UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
-        sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, sel.negotiated_frame_size);
+        sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, negotiated_frame_size);
 
     Ok(())
 }

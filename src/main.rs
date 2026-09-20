@@ -15,7 +15,6 @@
 //! │   └── time      rdtime/delay(Duration)/elapsed_since(25MHz timebase)
 //! ├── ipc.rs        大小核通信协议(DRAM 邮箱 ABI/帧通知/B2S 消息处理/pause-mute)
 //! ├── logger.rs     跨核 UART 控制台(DW8250 + 打印 + Dekker 行锁)+ log 门面
-//! ├── yuv_buf.rs    共享 YUV/RGB 缓冲布局
 //! ├── panic.rs      panic handler
 //! ├── platform.rs   板级(SG2002):SoC MMIO 地址表 + rtos 区布局 + USB 平台初始化
 //! ├── yuv_buf.rs    共享 YUV/RGB 平面几何(地址见 platform)
@@ -51,7 +50,7 @@ mod platform;
 mod drivers;
 
 use crate::drivers::usb::{dwc2::{self, Ep0}, uvc};
-use crate::drivers::usb::enumerate_topology_only;
+use crate::drivers::usb::enumerate_camera;
 
 #[no_mangle]
 pub(crate) extern "C" fn rust_main() -> ! {
@@ -64,7 +63,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
     unsafe { arch::trap::init_interrupts() };
 
     // UVC 初始化(同步,一次性)
-    let cam = enumerate_topology_only().expect("enum");
+    let cam = enumerate_camera().expect("enum");
     let ep0 = Ep0::new(u32::from(cam.addr), cam.ep0_mps);
 
     let cfg_buf = uvc::read_configuration_descriptor(&ep0, 1).expect("read cfg");
@@ -73,17 +72,12 @@ pub(crate) extern "C" fn rust_main() -> ! {
     let prefs = uvc::UvcPrefs {
         frame_w: 640,
         frame_h: 480,
-        max_pixels: 640 * 480,
         frame_interval: 333_333, // ≈30fps:给廉价 webcam 更多曝光/ISP 余量
     };
     let mut sel = uvc::parse_uvc_video_stream(cfg, cfg_total, &prefs).expect("parse stream");
 
     if let Some(ent) = uvc::parse_uvc_control_entities(cfg, cfg_total) {
-        let tune = uvc::UvcImageTuning {
-            ae_priority: None,   // 自动曝光,不限制帧率
-            ..Default::default()
-        };
-        let _ = uvc::uvc_init_camera_controls(&ep0, &ent, &tune);
+        let _ = uvc::uvc_init_camera_controls(&ep0, &ent);
     }
     uvc::uvc_start_video_stream(&ep0, &mut sel).expect("start stream");
     let _ = uvc::uvc_capture_one_frame(&ep0, &sel); // warmup
@@ -97,6 +91,7 @@ const FPS_REPORT_EVERY: u32 = 100;
 
 /// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
 struct PipelineStats {
+    frames: u32,
     cap: core::time::Duration,
     dec: core::time::Duration,
     ive: core::time::Duration,
@@ -108,6 +103,7 @@ struct PipelineStats {
 impl PipelineStats {
     fn new() -> Self {
         Self {
+            frames: 0,
             cap: core::time::Duration::ZERO,
             dec: core::time::Duration::ZERO,
             ive: core::time::Duration::ZERO,
@@ -122,7 +118,6 @@ impl PipelineStats {
 ///
 /// `ep0`/`sel` 由 rust_main 的初始化阶段产生。
 fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
-    let mut frame_count: u32 = 0;
     let mut st = PipelineStats::new();
 
     loop {
@@ -134,16 +129,16 @@ fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
         let t_cap0 = crate::arch::time::rdtime();
         match uvc::uvc_capture_one_frame(ep0, sel) {
             Ok(n) => {
-                frame_count = frame_count.wrapping_add(1);
+                st.frames = st.frames.wrapping_add(1);
                 st.cap += crate::arch::time::elapsed_since(t_cap0);
-                st.byte_acc += uvc::take_frame_bytes().max(n as u32) as u64;
+                st.byte_acc += n as u64;
 
                 // decode + notify
-                decode_and_notify(n, frame_count, &mut st);
+                decode_and_notify(n, &mut st);
 
                 // FPS 报告
-                if frame_count.wrapping_sub(st.fps_mark_frame) >= FPS_REPORT_EVERY {
-                    report_fps(frame_count, &mut st);
+                if st.frames.wrapping_sub(st.fps_mark_frame) >= FPS_REPORT_EVERY {
+                    report_fps(&mut st);
                 }
             }
             Err(_) => {
@@ -152,55 +147,54 @@ fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
     }
 }
 
+/// YUV 缺失时的兜底通知:只上行 MJPEG 本身(dims 按协商几何 640×480 编码)。
+fn notify_mjpeg_only(frame_count: u32, jpeg_len: usize) {
+    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
+        | ipc::encode_dims(640, 480);
+    ipc::notify(frame_count, jpeg_len as u32, flags);
+}
+
 /// JPU 解码 → IVE CSC → 邮箱 notify(单帧处理)。
-fn decode_and_notify(jpeg_len: usize, frame_count: u32, st: &mut PipelineStats) {
+///
+/// 取不到 DMA 帧数据与解码失败共用同一条兜底路径(只通知 MJPEG)。
+fn decode_and_notify(jpeg_len: usize, st: &mut PipelineStats) {
     let jpeg = match dwc2::dma_rx_slice(uvc::UVC_ASSEMBLED_JPEG_DMA_OFF, jpeg_len) {
         Some(s) => s,
-        None => {
-            let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
-                | ipc::encode_dims(640, 480);
-            ipc::notify(frame_count, jpeg_len as u32, flags);
-            return;
-        }
+        None => return notify_mjpeg_only(st.frames, jpeg_len),
     };
 
     let t_dec0 = crate::arch::time::rdtime();
     let decoded = crate::drivers::jpu::decode_to_shared(jpeg);
     st.dec += crate::arch::time::elapsed_since(t_dec0);
 
-    match decoded {
-        Ok((w, h, len)) => {
+    let (w, h, len) = match decoded {
+        Ok(r) => r,
+        Err(_) => return notify_mjpeg_only(st.frames, jpeg_len),
+    };
 
-            // IVE 硬件 CSC
-            let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
-            let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
-            let t_ive0 = crate::arch::time::rdtime();
-            if let Err(_e) = crate::drivers::ive::csc_yuv420_to_rgb888(
-                y_pa, u_pa, v_pa, w, w / 2,
-                r_pa, g_pa, b_pa, w, w, h,
-            ) {
-            }
-            st.ive += crate::arch::time::elapsed_since(t_ive0);
-
-            let reported = len.min(platform::YUV_BUF_SIZE);
-            let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
-                | ipc::FLAG_YUV_READY
-                | ipc::encode_dims(w, h);
-            ipc::notify(frame_count, reported as u32, flags);
-        }
-        Err(_) => {
-            let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
-                | ipc::encode_dims(640, 480);
-            ipc::notify(frame_count, jpeg_len as u32, flags);
-        }
+    // IVE 硬件 CSC
+    let (y_pa, u_pa, v_pa) = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
+    let (r_pa, g_pa, b_pa) = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
+    let t_ive0 = crate::arch::time::rdtime();
+    if let Err(_e) = crate::drivers::ive::csc_yuv420_to_rgb888(
+        y_pa, u_pa, v_pa, w, w / 2,
+        r_pa, g_pa, b_pa, w, w, h,
+    ) {
     }
+    st.ive += crate::arch::time::elapsed_since(t_ive0);
+
+    let reported = len.min(platform::YUV_BUF_SIZE);
+    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
+        | ipc::FLAG_YUV_READY
+        | ipc::encode_dims(w, h);
+    ipc::notify(st.frames, reported as u32, flags);
 }
 
 /// 每 N 帧打印一次 FPS 统计。
-fn report_fps(frame_count: u32, st: &mut PipelineStats) {
+fn report_fps(st: &mut PipelineStats) {
     let now = crate::arch::time::rdtime();
     let dt = now.wrapping_sub(st.fps_mark_time);
-    let frames = frame_count.wrapping_sub(st.fps_mark_frame) as u64;
+    let frames = st.frames.wrapping_sub(st.fps_mark_frame) as u64;
     let fps_x100 = if dt > 0 {
         frames * crate::arch::time::TIMEBASE_HZ * 100 / dt
     } else { 0 };
@@ -212,7 +206,7 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
         "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
          us{{cap={} dec={} ive={} hb={}}} \
          jpu{{inv1={} poll={} inv2={} cpy={} cln={}}} usbisr={} jpu_err={}\n",
-        frame_count,
+        st.frames,
         fps_x100 / 100,
         fps_x100 % 100,
         st.byte_acc / frames.max(1),
@@ -233,13 +227,13 @@ fn report_fps(frame_count: u32, st: &mut PipelineStats) {
         per_frame(crate::drivers::jpu::trace::take_step_time(
             crate::drivers::jpu::trace::step::CLEAN_STREAM)),
         crate::drivers::usb::dwc2::take_usb_isr_count(),
-        crate::drivers::jpu::reset_count(),
+        crate::drivers::jpu::take_reset_count(),
     ));
 
     st.cap = core::time::Duration::ZERO;
     st.dec = core::time::Duration::ZERO;
     st.ive = core::time::Duration::ZERO;
     st.byte_acc = 0;
-    st.fps_mark_frame = frame_count;
+    st.fps_mark_frame = st.frames;
     st.fps_mark_time = now;
 }

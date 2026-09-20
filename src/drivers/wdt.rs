@@ -8,7 +8,7 @@
 
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::Writeable;
-use tock_registers::registers::{ReadOnly, ReadWrite, WriteOnly};
+use tock_registers::registers::{ReadWrite, WriteOnly};
 
 register_bitfields![u32,
     /// WDT_CR（0x00）：控制。
@@ -27,11 +27,11 @@ register_bitfields![u32,
 ];
 
 register_structs! {
-    /// DW APB WDT 寄存器映射（使能/档位/喂狗；CCVR 当前计数，调试用）。
+    /// DW APB WDT 寄存器映射（使能/档位/喂狗）。
     pub DwApbWdt {
         (0x00 => pub cr: ReadWrite<u32, CR::Register>),
         (0x04 => pub torr: ReadWrite<u32, TORR::Register>),
-        (0x08 => pub ccvr: ReadOnly<u32>),
+        (0x08 => _reserved: [u32; 1]),
         (0x0c => pub crr: WriteOnly<u32>),
         (0x10 => @END),
     }

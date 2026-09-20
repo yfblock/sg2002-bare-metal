@@ -34,7 +34,7 @@ pub mod enumerate;
 pub mod topology;
 pub mod uvc;
 
-pub use enumerate::enumerate_topology_only;
+pub use enumerate::enumerate_camera;
 
 // DWC2 寄存器一律走 [`dwc2::regs`] 的 `tock-registers` 访问器。
 

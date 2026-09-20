@@ -11,10 +11,6 @@ register_bitfields![u32,
     pub GAHBCFG [
         GLBL_INTR_EN OFFSET(0) NUMBITS(1) [],
         HBSTLEN OFFSET(1) NUMBITS(4) [
-            Single = 0,
-            Incr = 1,
-            Incr4 = 3,
-            Incr8 = 5,
             Incr16 = 7,
         ],
         DMA_EN OFFSET(5) NUMBITS(1) [],
@@ -24,18 +20,7 @@ register_bitfields![u32,
         TOUTCAL OFFSET(0) NUMBITS(3) [],
         PHYIF16 OFFSET(3) NUMBITS(1) [],
         ULPI_UTMI_SEL OFFSET(4) NUMBITS(1) [],
-        FSINTF OFFSET(5) NUMBITS(1) [],
-        PHYSEL OFFSET(6) NUMBITS(1) [],
-        SRPCAP OFFSET(8) NUMBITS(1) [],
-        HNPCAP OFFSET(9) NUMBITS(1) [],
-        USBTRDTIM OFFSET(10) NUMBITS(4) [],
-        TERMSELDLPULSE OFFSET(22) NUMBITS(1) [],
-        ULPI_AUTORES OFFSET(23) NUMBITS(1) [],
-        IND_COMPLEMENT OFFSET(25) NUMBITS(1) [],
-        IND_PASSTHROUGH OFFSET(26) NUMBITS(1) [],
-        ULPI_INT_PROT_DIS OFFSET(27) NUMBITS(1) [],
         FORCEHOSTMODE OFFSET(29) NUMBITS(1) [],
-        FORCEDEVMODE OFFSET(30) NUMBITS(1) [],
     ],
     /// 复位与 FIFO flush。
     pub GRSTCTL [
@@ -49,61 +34,11 @@ register_bitfields![u32,
     /// 全局中断状态（W1C 位：USBSUSP/USBRST/ENUMDONE/ISOOUTDROP/EOPF/RSTDET/WKUPINT 等）。
     pub GINTSTS [
         CURMODE_HOST OFFSET(0) NUMBITS(1) [],
-        MODEMIS OFFSET(1) NUMBITS(1) [],
-        OTGINT OFFSET(2) NUMBITS(1) [],
-        SOF OFFSET(3) NUMBITS(1) [],
-        RXFLVL OFFSET(4) NUMBITS(1) [],
-        NPTXFEMP OFFSET(5) NUMBITS(1) [],
-        GINNAKEFF OFFSET(6) NUMBITS(1) [],
-        GOUTNAKEFF OFFSET(7) NUMBITS(1) [],
-        ERLYSUSP OFFSET(10) NUMBITS(1) [],
-        USBSUSP OFFSET(11) NUMBITS(1) [],
-        USBRST OFFSET(12) NUMBITS(1) [],
-        ENUMDONE OFFSET(13) NUMBITS(1) [],
-        ISOOUTDROP OFFSET(14) NUMBITS(1) [],
-        EOPF OFFSET(15) NUMBITS(1) [],
-        EPMIS OFFSET(17) NUMBITS(1) [],
-        IEPINT OFFSET(18) NUMBITS(1) [],
-        OEPINT OFFSET(19) NUMBITS(1) [],
-        INCOMPLPOUT OFFSET(20) NUMBITS(1) [],
-        INCOMPLPIN OFFSET(21) NUMBITS(1) [],
-        FETSUSP OFFSET(22) NUMBITS(1) [],
-        RSTDET OFFSET(23) NUMBITS(1) [],
-        PRTINT OFFSET(24) NUMBITS(1) [],
         HCHINT OFFSET(25) NUMBITS(1) [],
-        CONIDSTSCHNG OFFSET(28) NUMBITS(1) [],
-        DISCONNINT OFFSET(29) NUMBITS(1) [],
-        SESSREQINT OFFSET(30) NUMBITS(1) [],
-        WKUPINT OFFSET(31) NUMBITS(1) [],
     ],
     /// 全局中断掩码（位定义与 [`GINTSTS`] 一一对应）。
     pub GINTMSK [
-        MODEMIS OFFSET(1) NUMBITS(1) [],
-        OTGINT OFFSET(2) NUMBITS(1) [],
-        SOF OFFSET(3) NUMBITS(1) [],
-        RXFLVL OFFSET(4) NUMBITS(1) [],
-        NPTXFEMP OFFSET(5) NUMBITS(1) [],
-        GINNAKEFF OFFSET(6) NUMBITS(1) [],
-        GOUTNAKEFF OFFSET(7) NUMBITS(1) [],
-        ERLYSUSP OFFSET(10) NUMBITS(1) [],
-        USBSUSP OFFSET(11) NUMBITS(1) [],
-        USBRST OFFSET(12) NUMBITS(1) [],
-        ENUMDONE OFFSET(13) NUMBITS(1) [],
-        ISOOUTDROP OFFSET(14) NUMBITS(1) [],
-        EOPF OFFSET(15) NUMBITS(1) [],
-        EPMIS OFFSET(17) NUMBITS(1) [],
-        IEPINT OFFSET(18) NUMBITS(1) [],
-        OEPINT OFFSET(19) NUMBITS(1) [],
-        INCOMPLPOUT OFFSET(20) NUMBITS(1) [],
-        INCOMPLPIN OFFSET(21) NUMBITS(1) [],
-        FETSUSP OFFSET(22) NUMBITS(1) [],
-        RSTDET OFFSET(23) NUMBITS(1) [],
-        PRTINT OFFSET(24) NUMBITS(1) [],
         HCHINT OFFSET(25) NUMBITS(1) [],
-        CONIDSTSCHNG OFFSET(28) NUMBITS(1) [],
-        DISCONNINT OFFSET(29) NUMBITS(1) [],
-        SESSREQINT OFFSET(30) NUMBITS(1) [],
-        WKUPINT OFFSET(31) NUMBITS(1) [],
     ],
     /// OTG 控制寄存器（`dr_mode=otg` 时主机会话 override 用）。
     pub GOTGCTL [
@@ -125,15 +60,10 @@ register_bitfields![u32,
     /// 硬件配置 4（专用 FIFO 标志、UTMI PHY 数据宽度）。
     pub GHWCFG4 [
         DED_FIFO_EN OFFSET(25) NUMBITS(1) [],
-        UTMI_PHY_DATA_WIDTH OFFSET(14) NUMBITS(2) [
-            Eight = 0,
-            Sixteen = 1,
-            Programmable = 2,
-        ],
+        UTMI_PHY_DATA_WIDTH OFFSET(14) NUMBITS(2) [],
     ],
     /// 动态 FIFO 配置（EP info base）。
     pub GDFIFOCFG [
-        GDFIFOCFG OFFSET(0) NUMBITS(16) [],
         EPINFOBASE OFFSET(16) NUMBITS(16) [],
     ],
     /// RX FIFO 深度。
@@ -152,9 +82,7 @@ register_bitfields![u32,
     ],
     /// 主机配置（FS/LS、PHY 时钟）。
     pub HCFG [
-        FSLSPCLKSEL OFFSET(0) NUMBITS(2) [
-            Pll48Mhz = 1,
-        ],
+        FSLSPCLKSEL OFFSET(0) NUMBITS(2) [],
         FSLSSUPP OFFSET(2) NUMBITS(1) [],
     ],
     /// 主机端口控制状态（HPRT0）。
@@ -168,33 +96,22 @@ register_bitfields![u32,
         CONNDET OFFSET(1) NUMBITS(1) [],
         ENA OFFSET(2) NUMBITS(1) [],
         ENACHG OFFSET(3) NUMBITS(1) [],
-        OVRCURACT OFFSET(4) NUMBITS(1) [],
         OVRCURCHG OFFSET(5) NUMBITS(1) [],
         RST OFFSET(8) NUMBITS(1) [],
-        LNSTS OFFSET(10) NUMBITS(2) [],
         PWR OFFSET(12) NUMBITS(1) [],
-        SPD OFFSET(17) NUMBITS(2) [
-            HighSpeed = 0,
-            FullSpeed = 1,
-            LowSpeed = 2,
-        ],
     ],
     /// 主机帧编号（HFNUM）。
     pub HFNUM [
         FRNUM OFFSET(0) NUMBITS(16) [],
-        FRREM OFFSET(16) NUMBITS(16) [],
     ],
     /// 主机通道字符（HCCHAR）：MPS、EP、方向、类型、设备地址、奇偶帧、CHENA/CHDIS。
     pub HCCHAR [
         MPS OFFSET(0) NUMBITS(11) [],
         EPNUM OFFSET(11) NUMBITS(4) [],
         EPDIR OFFSET(15) NUMBITS(1) [],
-        LSPDDEV OFFSET(17) NUMBITS(1) [],
         EPTYPE OFFSET(18) NUMBITS(2) [
             Control = 0,
             Isochronous = 1,
-            Bulk = 2,
-            Interrupt = 3,
         ],
         MC OFFSET(20) NUMBITS(2) [],
         DEVADDR OFFSET(22) NUMBITS(7) [],
@@ -209,7 +126,6 @@ register_bitfields![u32,
         AHBERR OFFSET(2) NUMBITS(1) [],
         STALL OFFSET(3) NUMBITS(1) [],
         NAK OFFSET(4) NUMBITS(1) [],
-        ACK OFFSET(5) NUMBITS(1) [],
         NYET OFFSET(6) NUMBITS(1) [],
         XACTERR OFFSET(7) NUMBITS(1) [],
         BBLERR OFFSET(8) NUMBITS(1) [],
@@ -260,7 +176,7 @@ register_structs! {
         (0x028 => pub gnptxfsiz: ReadWrite<u32, GNPTXFSIZ::Register>),
         (0x02c => _reserved02c),
         (0x040 => pub gsnpsid: ReadOnly<u32>),
-        (0x044 => pub ghwcfg1: ReadOnly<u32>),
+        (0x044 => _reserved044),
         (0x048 => pub ghwcfg2: ReadOnly<u32, GHWCFG2::Register>),
         (0x04c => pub ghwcfg3: ReadOnly<u32, GHWCFG3::Register>),
         (0x050 => pub ghwcfg4: ReadOnly<u32, GHWCFG4::Register>),
@@ -286,34 +202,6 @@ register_structs! {
     }
 }
 
-register_bitfields![u32,
-    /// CV182x 片内 USB2 PHY `REG014`（UTMI 控制覆盖，与 vendor `platform.c` 字段一致）：
-    /// - `UTMI_OVERRIDE` (bit0)：1 = 软件接管 UTMI 信号；0 = 由 DWC2 接管（host 路径必须为 0）
-    /// - `OPMODE` (bit1..2)：UTMI OPMODE，host 路径为 00 (Normal)
-    /// - `XCVRSEL` (bit3..4)：UTMI XCVRSEL，host 路径为 00 (HS)，01=FS、10=LS、11=FS+LS
-    /// - `TERMSEL` (bit5)：1 = 强制 FS termination（设为 1 会禁掉 HS chirp）
-    /// - `DPPULLDOWN/DMPULLDOWN` (bit6/bit7)：host 模式 PHY 必须给 D+/D- 加下拉，此处为 SW override 使能
-    /// - `UTMI_RESET` (bit8)：UTMI 总线复位
-    pub PhyReg014 [
-        UTMI_OVERRIDE OFFSET(0) NUMBITS(1) [],
-        OPMODE OFFSET(1) NUMBITS(2) [
-            Normal = 0,
-            NonDriving = 1,
-            DisableBitStuffNRZI = 2,
-        ],
-        XCVRSEL OFFSET(3) NUMBITS(2) [
-            HighSpeed = 0,
-            FullSpeed = 1,
-            LowSpeed = 2,
-            FsLs = 3,
-        ],
-        TERMSEL OFFSET(5) NUMBITS(1) [],
-        DPPULLDOWN OFFSET(6) NUMBITS(1) [],
-        DMPULLDOWN OFFSET(7) NUMBITS(1) [],
-        UTMI_RESET OFFSET(8) NUMBITS(1) [],
-    ],
-];
-
 register_structs! {
     /// CV182x 片内 USB2 PHY MMIO（DTS `usb@04340000` 第二段 `reg`，物理基址 [`crate::platform::CV182X_USB2_PHY_BASE`]）。
     /// 字段名对齐 vendor Linux `drivers/usb/dwc2/platform.c` 中的 `REGxxx` 宏。
@@ -321,23 +209,23 @@ register_structs! {
         (0x000 => _reserved000),
         (0x004 => _reserved004),
         (0x008 => _reserved008),
-        (0x00c => pub reg00c: ReadWrite<u32>),
+        (0x00c => _reserved00c),
         (0x010 => _reserved010),
-        (0x014 => pub reg014: ReadWrite<u32, PhyReg014::Register>),
+        (0x014 => pub reg014: ReadWrite<u32>),
         (0x018 => _reserved018),
-        (0x01c => pub reg01c: ReadWrite<u32>),
+        (0x01c => _reserved01c),
         (0x020 => _reserved020),
         (0x024 => _reserved024),
         (0x028 => _reserved028),
-        (0x02c => pub reg02c: ReadWrite<u32>),
+        (0x02c => _reserved02c),
         (0x030 => _reserved030),
         (0x034 => _reserved034),
         (0x038 => _reserved038),
-        (0x03c => pub reg03c: ReadWrite<u32>),
+        (0x03c => _reserved03c),
         (0x040 => _reserved040),
         (0x044 => _reserved044),
         (0x048 => _reserved048),
-        (0x04c => pub reg04c: ReadWrite<u32>),
+        (0x04c => _reserved04c),
         (0x050 => _reserved050),
         (0x054 => _reserved054),
         (0x058 => @END),

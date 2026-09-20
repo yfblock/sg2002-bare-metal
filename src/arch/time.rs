@@ -1,4 +1,4 @@
-//! 时间与延时：`rdtime`（CLINT 硬件定时器，两核共享）+ `delay(Duration)` + `Deadline`。
+//! 时间与延时：`rdtime`（CLINT 硬件定时器，两核共享）+ `delay(Duration)`。
 //!
 //! SG2002 的 timebase = 25 MHz（实测 25.005 MHz，25 ticks/µs）；大核 C906B(1GHz)
 //! 和小核 C906L(25MHz) 读同一个 mtime，跨核时间戳可直接比较。

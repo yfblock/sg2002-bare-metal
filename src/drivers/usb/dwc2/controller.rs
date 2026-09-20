@@ -8,7 +8,6 @@
 //! `GDFIFOCFG`、`PCGCTL`、`TOUTCAL`），见
 //! [Sipeed LicheeRV-Nano `params.c`](https://github.com/sipeed/LicheeRV-Nano-Build/blob/d4003f15b35d43ad4842f427050ab2bba0114fa5/linux_5.10/drivers/usb/dwc2/params.c#L217)。
 
-#[allow(unused_imports)]
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use crate::drivers::usb::error::{UsbError, UsbResult};
@@ -16,7 +15,7 @@ use core::time::Duration;
 
 use crate::arch::time::delay;
 use crate::drivers::usb;
-#[allow(unused_imports)]
+use super::ch::spin_delay;
 use tock_registers::registers::ReadWrite;
 use super::regs::{
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
@@ -46,13 +45,6 @@ const DWC2_CORE_REV_2_91A: u32 = 0x4f54_291a;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 此版本用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x4f54_420a;
 const DWC2_CORE_REV_MASK: u32 = 0xffff;
-
-#[inline]
-fn spin_delay(iterations: u32) {
-    for _ in 0..iterations {
-        core::hint::spin_loop();
-    }
-}
 
 fn wait_ahb_idle() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
@@ -139,10 +131,6 @@ fn hprt0_port(pwr: bool, rst: bool) {
     );
 }
 
-fn port_power_on() {
-    hprt0_port(true, false);
-}
-
 fn port_reset_pulse() {
     // USB 2.0 spec TDRSTR (root hub reset) min = 50ms（实测 cv182x 的 PHY chirp K/J
     // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
@@ -161,12 +149,8 @@ fn port_reset_pulse() {
 /// 在已检测到设备连接后发出 **USB 总线复位**（应在 `CONNSTS==1` 之后调用，符合主机枚举顺序）。
 ///
 /// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
-pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
-    if hprt0().is_set(HPRT0::CONNDET) {
-        hprt0().modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
-    }
+pub fn dwc2_host_root_bus_reset_pulse() {
     port_reset_pulse();
-    Ok(())
 }
 
 // CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）
@@ -224,7 +208,6 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
         ptx = total.saturating_sub(rx).saturating_sub(nptx);
     }
 
-    let dwc2 = usb::dwc2_regs();
     dwc2.grxfsiz.write(GRXFSIZ::RXFDEP.val(rx));
     dwc2.gnptxfsiz
         .write(GNPTXFSIZ::NPTXFDEP.val(nptx) + GNPTXFSIZ::NPTXFSTADDR.val(rx));
@@ -335,10 +318,10 @@ pub fn dwc2_host_init() -> UsbResult<()> {
 
     dwc2.gintsts.set(0xFFFF_FFFF);
 
-    port_power_on();
+    // 根口上电（PWR=1，不拉 RST）
+    hprt0_port(true, false);
 
     cv182x_usb2_phy_host_clear_utmi_override();
-    init_gotgctl_otg_host_session_overrides();
 
     Ok(())
 }

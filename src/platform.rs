@@ -185,7 +185,7 @@ unsafe fn cvitek_usb_top_host_bringup() {
 
 fn pinmux_usb_vbus_det_gpio_output_prep() {
     // 复用 USB_VBUS_DET 引脚为 XGPIOB[6](identity 映射,FMUX 寄存器视图直接取)
-    pinmux::regs()
+    pinmux::pinmux_regs()
         .usb_vbus_det
         .write(pinmux::FSEL::VAL::XGPIOB_6);
     // IOBLK G1:USB_VBUS_DET pad 驱动能力拉满(bits[7:5]=7,7=最强档)
@@ -194,6 +194,7 @@ fn pinmux_usb_vbus_det_gpio_output_prep() {
 
 fn enable_usb_vbus_gpio() {
     let gpio = unsafe { GPIO::new(GPIO1_BASE) };
-    gpio.pin(VBUS_GPIO_PIN).set_output_direction();
-    gpio.pin(VBUS_GPIO_PIN).set(VBUS_GPIO_ACTIVE_HIGH);
+    let pin = gpio.pin(VBUS_GPIO_PIN);
+    pin.set_output_direction();
+    pin.set(VBUS_GPIO_ACTIVE_HIGH);
 }

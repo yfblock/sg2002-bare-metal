@@ -4,7 +4,7 @@ use core::panic::PanicInfo;
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    // 写一个错误标记到邮箱 magic，便于大核发现小核 panic。
+    // 写 frame_count 错误标记（0xFFFF_FFFF），大核的 panic 探测器读该字段发现小核 panic。
     crate::ipc::write(0xFFFF_FFFF, 0, 0);
     loop {
         riscv::asm::wfi();

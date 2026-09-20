@@ -6,7 +6,6 @@ use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup;
 
-const USB_DT_INTERFACE: u8 = 4;
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
 
@@ -19,7 +18,6 @@ const USB_SUBCLASS_VIDEO_STREAMING: u8 = 0x02;
 const USB_SUBCLASS_VIDEO_CONTROL: u8 = 0x01;
 
 // VideoControl class-specific interface descriptor subtypes
-const VC_HEADER: u8 = 0x01;
 const VC_INPUT_TERMINAL: u8 = 0x02;
 const VC_PROCESSING_UNIT: u8 = 0x05;
 
@@ -48,9 +46,7 @@ pub struct UvcStreamSelection {
     /// PROBE/COMMIT 协商后设备使用的 `dwMaxPayloadTransferSize`（单微帧字节数）。
     /// 由 [`crate::drivers::usb::uvc::uvc_start_video_stream`] 在协商后填充，用于 capture 切包。
     pub negotiated_payload_size: u32,
-    /// PROBE/COMMIT 协商后设备的 `dwMaxVideoFrameSize`(用于缓冲规划)。
-    pub negotiated_frame_size: u32,
-    /// 同一个 ep_num 下的所有 Isoch alt 候选 `(alt, mps_raw)`，按 mps*total 升序。
+    /// 同一个 ep_num 下的所有 Isoch alt 候选 `(alt, mps_raw)`，按描述符出现顺序记录（未排序）。
     /// PROBE 协商后用 [`reselect_isoch_alt_for_payload`] 回选最匹配的 alt，避免出现
     /// "alt=1 但 negotiated_payload=3060" 这种带宽不够的 mismatch。
     pub isoch_alts_count: u8,
@@ -67,7 +63,6 @@ fn choose_frame_interval(
     i: usize,
     bl: usize,
     dflt_ival: u32,
-    _min_ival: u32,
     ival_type: u8,
     pref: u32,
 ) -> u32 {
@@ -137,18 +132,17 @@ pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult
 /// 端点选择 **Isoch IN**(取带宽最高的 alt)。
 ///
 /// 同时把所有 VS 候选打到串口，便于诊断。
-/// 选流偏好。全 0 字段 = 不启用对应偏好(退回内置打分表)。
+/// 选流偏好。
 ///
-/// - `frame_w`/`frame_h` 同时非 0:精确匹配该尺寸的 frame 得最高分;
-///   典型:JPU DMA pool 把可硬件解码的分辨率限制在 ~640×480,超出 `jpu_alloc` 失败
-/// - `max_pixels`:非 0 时按"≤ 上限越接近越好、超出倒扣"打分
+/// - `frame_w`/`frame_h`：精确匹配该尺寸的 frame 得最高分；其余按"≤ 偏好面积
+///   越接近越好、超出倒扣"打分。典型：JPU DMA pool 把可硬件解码的分辨率限制在
+///   ~640×480，超出 `jpu_alloc` 失败
 /// - `frame_interval`(100ns 单位,UVC `dwFrameInterval`):非 0 时从各 frame
 ///   的可用 interval 中选**最接近**值而非默认最小间隔(最高 fps)。
 ///   典型 `333_333` ≈ 30 fps——给廉价 webcam 更多曝光/ISP 余量
 pub struct UvcPrefs {
     pub frame_w: u16,
     pub frame_h: u16,
-    pub max_pixels: u32,
     pub frame_interval: u32,
 }
 
@@ -176,7 +170,6 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
     let mut mjpeg_pick: Option<(u8, u8, u16, u16, u32)> = None;
     let mut uncomp_pick: Option<(u8, u8, u16, u16, u32)> = None;
     let mut cur_fmt_ix_for_frame = 0u8;
-    let mut cur_fmt_subtype_for_frame = 0u8;
 
     while i + 2 <= len {
         let bl = cfg[i] as usize;
@@ -185,7 +178,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
         }
         let ty = cfg[i + 1];
 
-        if ty == USB_DT_INTERFACE && bl >= 9 {
+        if ty == setup::USB_DT_INTERFACE && bl >= 9 {
             cur_ifc_num = cfg[i + 2];
             cur_alt = cfg[i + 3];
             cur_ifc_class = cfg[i + 5];
@@ -196,7 +189,6 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
         {
             let st = cfg.get(i + 2).copied().unwrap_or(0);
             if (st == VS_FORMAT_MJPEG || st == VS_FORMAT_UNCOMPRESSED) && bl >= 4 {
-                cur_fmt_subtype_for_frame = st;
                 cur_fmt_ix_for_frame = cfg[i + 3];
                 log::info!("UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={} subtype={:#04x} ({})",
                     cur_fmt_ix_for_frame, st,
@@ -254,47 +246,27 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
                 }
                 // 选定本 frame 描述符实际使用的 interval：
                 // 设了 PREFERRED_FRAME_INTERVAL 时选最接近它的可用值；否则沿用最小（最高 fps）。
-                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, min_ival, ival_type, prefs.frame_interval);
+                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, ival_type, prefs.frame_interval);
                 let dflt_ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
                 let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
-                let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG
-                    || st == VS_FRAME_MJPEG;
+                let is_mjpeg = st == VS_FRAME_MJPEG;
                 let rank = |(_, _, pw, ph, _): (u8, u8, u16, u16, u32)| -> i32 {
-                    let w = pw as i32;
-                    let h = ph as i32;
+                    let w = i32::from(pw);
+                    let h = i32::from(ph);
                     let area = w * h;
-                    // ① 精确尺寸优先：设过 frame_w/h 后，精确匹配得最高分。
-                    let pref_w = prefs.frame_w;
-                    let pref_h = prefs.frame_h;
-                    if pref_w != 0 && pref_h != 0 {
-                        let pw_i = pref_w as i32;
-                        let ph_i = pref_h as i32;
-                        if w == pw_i && h == ph_i {
-                            return 2_000_000;
-                        }
-                        let pref_area = pw_i.saturating_mul(ph_i);
-                        // 非精确匹配：≤ pref_area 越接近越好；> pref_area 倒扣。
-                        return if area <= pref_area {
-                            pref_area - area
-                        } else {
-                            -(area - pref_area)
-                        };
+                    let pref_w = i32::from(prefs.frame_w);
+                    let pref_h = i32::from(prefs.frame_h);
+                    // ① 精确尺寸优先：与偏好 frame_w/h 完全一致的 frame 得最高分。
+                    if w == pref_w && h == pref_h {
+                        return 2_000_000;
                     }
-                    let pref_max = prefs.max_pixels as i32;
-                    if pref_max > 0 {
-                        // 设了上限：area <= pref_max 时越接近越好；超过则按超出量倒扣分。
-                        return if area <= pref_max {
-                            area.saturating_add(1_000_000)
-                        } else {
-                            (-(area - pref_max)).saturating_sub(1_000)
-                        };
+                    // ② 非精确匹配：≤ 偏好面积越接近越好；超出按超出量倒扣。
+                    let pref_area = pref_w.saturating_mul(pref_h);
+                    if area <= pref_area {
+                        pref_area - area
+                    } else {
+                        -(area - pref_area)
                     }
-                    if w == 1280 && h == 720 { return 1_000_000; }
-                    if w == 640 && h == 480 { return 900_000; }
-                    if w == 800 && h == 600 { return 800_000; }
-                    if w == 1024 && h == 768 { return 750_000; }
-                    if w == 320 && h == 240 { return 700_000; }
-                    if area <= 1280 * 720 { 600_000 - (1280 * 720 - area) } else { 100_000 - (area - 1280 * 720) }
                 };
                 if is_mjpeg {
                     let pick_better = match mjpeg_pick {
@@ -332,23 +304,19 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
                 let tak = (cur_alt, ep_num, mps_raw, cur_ifc_num);
                 // 沿用旧逻辑给 best_isoch 一个"初始猜测"（mult=1 优先），但真正的 alt
                 // 由 PROBE 之后 [`reselect_isoch_alt_for_payload`] 重新选定。
-                let new_mult = mult;
+                let payload = dwc2::wmax_payload_per_uframe(mps_raw);
                 best_isoch = Some(match best_isoch {
                     None => tak,
                     Some(b) => {
-                        let old_mps = dwc2::wmax_mps(b.2);
-                        let old_mult = dwc2::wmax_mult(b.2);
-                        let new_score = if new_mult == 1 {
-                            10_000_000u32 + u32::from(mps)
+                        // (mult==1, payload) 字典序：mult=1 候选优先（DWC2 兼容），
+                        // 同档比每微帧总吞吐。
+                        if (mult == 1, payload)
+                            > (dwc2::wmax_mult(b.2) == 1, dwc2::wmax_payload_per_uframe(b.2))
+                        {
+                            tak
                         } else {
-                            u32::from(mps) * u32::from(new_mult)
-                        };
-                        let old_score = if old_mult == 1 {
-                            10_000_000u32 + u32::from(old_mps)
-                        } else {
-                            u32::from(old_mps) * u32::from(old_mult)
-                        };
-                        if new_score > old_score { tak } else { b }
+                            b
+                        }
                     }
                 });
                 if isoch_alts_count < isoch_alts.len() {
@@ -366,12 +334,10 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
     };
 
     // 格式优先级：MJPEG 优先（带宽小；JPU 解码 MJPEG，Uncompressed 只作兜底）。
-    let (fmt_ix, frame_ix, frame_w, frame_h, interval, is_mjpeg) = match mjpeg_pick {
-        Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, true),
-        None => match uncomp_pick {
-            Some((fi, frix, w, h, iv)) => (fi, frix, w, h, iv, false),
-            None => (1, 1, 0, 0, 333_333, false),
-        },
+    let (fmt_ix, frame_ix, frame_w, frame_h, interval, is_mjpeg) = match (mjpeg_pick, uncomp_pick) {
+        (Some((fi, frix, w, h, iv)), _) => (fi, frix, w, h, iv, true),
+        (None, Some((fi, frix, w, h, iv))) => (fi, frix, w, h, iv, false),
+        (None, None) => return Err(UsbError::Protocol("no VS format/frame")),
     };
 
     log::info!("UVC: SEL if={vs_if} alt={alt} ep={epn} mps_raw={:#06x} fmt_ix={fmt_ix} frame_ix={frame_ix} {}x{} iv={interval} mjpeg={is_mjpeg}",
@@ -389,7 +355,6 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
         frame_w,
         frame_h,
         negotiated_payload_size: 0,
-        negotiated_frame_size: 0,
         isoch_alts_count: isoch_alts_count as u8,
         isoch_alts,
     })
@@ -495,7 +460,7 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
         }
         let ty = cfg[i + 1];
 
-        if ty == USB_DT_INTERFACE && bl >= 9 {
+        if ty == setup::USB_DT_INTERFACE && bl >= 9 {
             cur_ifc_num = cfg[i + 2];
             cur_ifc_class = cfg[i + 5];
             cur_ifc_sub = cfg[i + 6];
@@ -510,7 +475,6 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
         {
             let st = cfg[i + 2];
             match st {
-                VC_HEADER => {}
                 VC_INPUT_TERMINAL
                     // bLength=15+x，bUnitID@3, wTerminalType@4..6, bAssocTerm@6,
                     // 后续 wObjectiveFocalLengthMin/Max + wOcularFocalLength + bControlSize@14, bmControls@15..

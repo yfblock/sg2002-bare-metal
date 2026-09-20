@@ -1,7 +1,7 @@
 //! JPU 硬件 JPEG 解码器（Baseline，轮询模式）。
 
-use super::header::{HuffTable, JpegHeaderInfo, parse_jpeg_header};
-use super::mem::{PhysBuffer, copy_to_phys, jpu_alloc, jpu_free, phys_slice};
+use super::header::{JpegHeaderInfo, parse_jpeg_header};
+use super::mem::{PhysBuffer, copy_to_phys, jpu_free};
 use super::regs::{
     HUFF_ADDR_MAX, HUFF_ADDR_PTR, HUFF_PHASE_MAX, HUFF_PHASE_MIN, HUFF_PHASE_PTR, HUFF_PHASE_VAL,
     MJPEG_HUFF_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START, MJPEG_PIC_STATUS,
@@ -9,76 +9,53 @@ use super::regs::{
     bbc_strm_ctrl_value, clear_pic_status, jpu_regs,
     pic_ctrl_value, wait_bbc_idle, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
 };
-use crate::arch::cache::{dcache_clean_range, dcache_invalidate_range};
+use crate::arch::cache::dcache_clean_range;
 use core::time::Duration;
 
 use crate::arch::time::{elapsed_since, rdtime};
 use tock_registers::interfaces::{Readable, Writeable};
 
-/// 解码结果：YUV420 planar，数据位于 DMA 帧缓冲（至下次 decode/Drop 有效）。
+/// 解码结果：YUV420 planar，数据位于固定输出 DMA 帧缓冲（至下次 decode 有效）。
 pub struct DecodeResult {
     pub width: u32,
     pub height: u32,
-    pub yuv_data: &'static [u8],
+    /// 输出帧字节数（YUV 平面总大小）。
+    pub frame_size: usize,
 }
 
-/// JPU 解码器实例（持有 stream/frame DMA 缓冲）。
+/// JPU 解码器实例（持有 stream DMA 缓冲 + 固定输出帧缓冲）。
 pub struct JpuDecoder {
     stream_buf: PhysBuffer,
+    /// 调用方指定的固定输出缓冲（物理地址，不属于内部 pool）：`decode()` 让 JPU
+    /// **直接 DMA 到这里**，省掉一次整帧 memcpy。CPU 从不通过 cache 读它，
+    /// 故不做输出侧 dcache 维护——不会有脏行写回覆盖 DMA 数据。
     frame_buf: PhysBuffer,
-    /// 调用方指定的输出缓冲（物理地址）。设了之后 `decode()` 让 JPU **直接 DMA
-    /// 到这里**，不再从内部 pool 分配 frame_buf，省掉一次整帧 memcpy。
-    output_buf: Option<PhysBuffer>,
-    /// CPU 是否会通过 cache 读解码输出。
-    /// 为 false 时跳过对输出缓冲的 dcache 维护——CPU 从不碰这块内存，
-    /// 就不会有脏行写回覆盖 DMA 数据，也不需要 invalidate 去看新数据。
-    cpu_reads_output: bool,
 }
 
 impl JpuDecoder {
-    /// 创建解码器，用 `hardware_init_at_no_vd_remap`（设时钟/复位/VC/软复位，但不设 VD_REMAP）。
+    /// 创建解码器，用 `hardware_init`（设时钟/复位/VC/软复位，但不设 VD_REMAP）。
     /// 适用于小核（C906L）：VD_REMAP 会把 32 位 DMA 地址扩展到 40 位，超出 DDR 范围。
     /// DMA pool 用外部地址（绕过静态 DMA_BUFFER 在预留区的问题）。
-    pub unsafe fn new_at_no_vd_remap_with_pool(dma_pool_base: usize, dma_pool_size: usize) -> Result<Self, &'static str> {
+    /// 输出帧固定 DMA 到 `[out_pa, out_pa+out_size)`。
+    ///
+    /// # Safety
+    /// 调用方须保证 pool 区与 `[out_pa, out_pa+out_size)` 均为有效、独占、
+    /// JPU DMA 可达的物理内存。
+    pub unsafe fn new_with_pool(
+        dma_pool_base: usize,
+        dma_pool_size: usize,
+        out_pa: usize,
+        out_size: usize,
+    ) -> Result<Self, &'static str> {
         let mut decoder = Self {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
-            frame_buf: PhysBuffer { addr: 0, size: 0 },
-            output_buf: None,
-            cpu_reads_output: true,
+            frame_buf: PhysBuffer { addr: out_pa, size: out_size },
         };
         super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
-        super::regs::hardware_init_no_vd_remap();
+        super::regs::hardware_init();
         decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
             .ok_or("Failed to allocate stream buffer")?;
         Ok(decoder)
-    }
-
-    /// JPU 挂死/解码出错后的硬件恢复：给 JPEG 块一次真正的复位脉冲。
-    ///
-    /// 光靠软复位（START_INIT）或重跑 `hardware_init_*` 都救不回来——后者只
-    /// "释放"复位位，对已在运行的块是空操作。详见 [`crate::drivers::jpu::regs::hard_reset_at`]。
-    pub fn recover(&mut self) {
-        super::regs::hard_reset_at();
-    }
-
-    /// 让 `decode()` 把 YUV 直接 DMA 到 `pa`，不再用内部 pool 的 frame_buf。
-    ///
-    /// 典型用途：`pa` 就是最终消费者（如另一个核）读取的共享缓冲——省掉
-    /// 「解码到 pool → memcpy 到共享区」这一整帧拷贝。实测 640x480 那次
-    /// memcpy 要 34ms，占整帧耗时的 56%。
-    ///
-    /// # Safety
-    /// 调用方须保证 `[pa, pa+size)` 是有效、独占、JPU DMA 可达的物理内存。
-    pub unsafe fn set_output_buffer(&mut self, pa: usize, size: usize) {
-        self.output_buf = Some(PhysBuffer { addr: pa, size });
-    }
-
-    /// 声明 CPU 是否会通过 cache 读解码输出（默认 true）。
-    ///
-    /// 设为 false 可跳过对输出缓冲的两次 dcache 维护（640x480 实测各 5.8ms）。
-    /// 仅当 CPU 确实从不读这块内存时才可以设 false。
-    pub fn set_cpu_reads_output(&mut self, v: bool) {
-        self.cpu_reads_output = v;
     }
 
     pub fn decode(&mut self, jpeg_data: &[u8]) -> Result<DecodeResult, &'static str> {
@@ -93,28 +70,13 @@ impl JpuDecoder {
 
         let (frame_size, layout) = frame_layout(&header_info)?;
 
-        match self.output_buf {
-            Some(out) => {
-                // 外部输出缓冲：不分配也不释放，直接 DMA 过去。
-                if frame_size > out.size {
-                    log::warn!(
-                        "[JPU] output buf too small: frame_size={} out.size={} {}x{} fmt={}",
-                        frame_size, out.size, header_info.width, header_info.height, header_info.format
-                    );
-                    return Err("output buffer too small");
-                }
-                self.frame_buf = PhysBuffer { addr: out.addr, size: out.size };
-            }
-            None => {
-                if !self.frame_buf.is_empty() {
-                    jpu_free(self.frame_buf);
-                    self.frame_buf = PhysBuffer { addr: 0, size: 0 };
-                }
-                self.frame_buf = jpu_alloc(frame_size).ok_or("Failed to alloc frame buf")?;
-            }
-        }
-        if self.cpu_reads_output {
-            dcache_invalidate_range(self.frame_buf.addr, frame_size);
+        // 外部输出缓冲：不分配也不释放，直接 DMA 过去。
+        if frame_size > self.frame_buf.size {
+            log::warn!(
+                "[JPU] output buf too small: frame_size={} out.size={} {}x{} fmt={}",
+                frame_size, self.frame_buf.size, header_info.width, header_info.height, header_info.format
+            );
+            return Err("output buffer too small");
         }
         super::trace::mark_timed(super::trace::step::INV_FRAME);
 
@@ -136,20 +98,17 @@ impl JpuDecoder {
 
         super::trace::mark_timed(super::trace::step::POLL);
         if let Err(e) = poll_decode_done() {
-            // 挂死/出错后必须真正复位 JPEG 块，否则后续每帧都会再等满一个超时。
-            self.recover();
+            // 挂死/出错后必须真正复位 JPEG 块（assert→deassert 脉冲），否则
+            // 后续每帧都会再等满一个超时。
+            super::regs::hard_reset();
             return Err(e);
         }
-
-        if self.cpu_reads_output {
-            dcache_invalidate_range(self.frame_buf.addr, frame_size);
         super::trace::mark_timed(super::trace::step::INV_AFTER);
-        }
 
         let result = DecodeResult {
             width: header_info.width,
             height: header_info.height,
-            yuv_data: phys_slice(self.frame_buf.addr, frame_size),
+            frame_size,
         };
         Ok(result)
     }
@@ -160,10 +119,7 @@ impl Drop for JpuDecoder {
         if !self.stream_buf.is_empty() {
             jpu_free(self.stream_buf);
         }
-        // 外部输出缓冲不属于内部 pool，不能 free。
-        if self.output_buf.is_none() && !self.frame_buf.is_empty() {
-            jpu_free(self.frame_buf);
-        }
+        // frame_buf 是外部固定输出缓冲，不属于内部 pool，不能 free。
     }
 }
 
@@ -292,7 +248,7 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].min_codes[j];
-            let temp = HuffTable::sign_extend_16(huff_data);
+            let temp = sign_extend_16(huff_data);
             jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
@@ -303,7 +259,7 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].max_codes[j];
-            let temp = HuffTable::sign_extend_16(huff_data);
+            let temp = sign_extend_16(huff_data);
             jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
@@ -314,7 +270,7 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
     for table_idx in [0, 2, 1, 3] {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].ptrs[j] as u32;
-            let temp = HuffTable::sign_extend_8(huff_data);
+            let temp = sign_extend_8(huff_data);
             jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | huff_data));
         }
     }
@@ -332,7 +288,7 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
 
         for j in 0..count.min(header.huff_tables[table_idx].num_values) {
             let val = header.huff_tables[table_idx].values[j] as u32;
-            let temp = HuffTable::sign_extend_8(val);
+            let temp = sign_extend_8(val);
             jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | val));
         }
         for _ in count..max_count {
@@ -342,6 +298,28 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
 
     jpu.huff_ctrl.write(MJPEG_HUFF_CTRL::PHASE.val(0));
     Ok(())
+}
+
+/// 负系数时 JPU 寄存器高位的全 1 填充(16-bit 系数 / 8-bit 系数装 24-bit 字段)
+const NEG_FILL_16: u32 = 0xFFFF;
+const NEG_FILL_24: u32 = 0xFFFFFF;
+
+/// 16-bit 系数的负值填充:最高位为 1 时高位全 1(T.81 F.2.2 EXTEND 语义)。
+fn sign_extend_16(huff_data: u32) -> u32 {
+    if huff_data & 0x8000 != 0 {
+        NEG_FILL_16
+    } else {
+        0
+    }
+}
+
+/// 8-bit 系数的负值填充:最高位为 1 时 24-bit 字段高位全 1。
+fn sign_extend_8(huff_data: u32) -> u32 {
+    if huff_data & 0x80 != 0 {
+        NEG_FILL_24
+    } else {
+        0
+    }
 }
 
 fn upload_quant_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {

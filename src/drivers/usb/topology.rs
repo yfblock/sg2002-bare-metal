@@ -1,6 +1,6 @@
 //! USB 总线拓扑：检测 **Hub**（含 QEMU 插入的虚拟 `usb-hub`）、读 Hub 描述符与端口状态，**递归**枚举下游设备并打印。
 //!
-//! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_topology_only()` 调用；
+//! 与 [`super::enumerate`] 配合：在 `dwc2_host_init` 之后由 `enumerate_camera()` 调用；
 //! 返回 [`UvcEnumerated`]（扫描到的 UVC 摄像头；未找到 = Err）。MSC 候选扫描已随 Bulk/MSC 路径移除，
 //! 需要时见 sg200x-bsp 的 `topology.rs`。
 
@@ -25,7 +25,7 @@ fn topo_indent(depth: u8) -> &'static str {
         "                    ",
         "                      ",
     ];
-    T.get(depth as usize).copied().unwrap_or("                      ")
+    T[(depth as usize).min(T.len() - 1)]
 }
 
 macro_rules! topo_log {
@@ -80,11 +80,6 @@ impl ScanState {
     }
 }
 
-#[inline]
-fn is_hub_device(class: u8, vid: u16, pid: u16) -> bool {
-    class == USB_CLASS_HUB || (vid == QEMU_USB_HUB_VID && pid == QEMU_USB_HUB_PID)
-}
-
 /// 读配置描述符前 64 字节，返回首个 **INTERFACE** 描述符的 `bInterfaceClass`（无则 0）。
 fn first_interface_class(ep: &dwc2::Ep0) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
@@ -96,7 +91,7 @@ fn first_interface_class(ep: &dwc2::Ep0) -> UsbResult<u8> {
             break;
         }
         let ty = buf[i + 1];
-        if ty == 4 && i + 6 <= buf.len() {
+        if ty == setup::USB_DT_INTERFACE && i + 6 <= buf.len() {
             return Ok(buf[i + 5]);
         }
         i = i.saturating_add(bl);
@@ -130,15 +125,16 @@ fn hub_port_status_w0(ep: &dwc2::Ep0, port: u16) -> UsbResult<u16> {
     Ok(u16::from_le_bytes([buf[0], buf[1]]))
 }
 
-/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`）。
+/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`，§11.24.2.1）：
+/// 00=full-speed, 01=low-speed, 10=high-speed。
 enum PortSpeed { Hs, Fs, Ls }
 
 impl PortSpeed {
     fn from_status(status: u16) -> Self {
         match (status >> 9) & 3 {
-            0 => PortSpeed::Hs,
+            0 => PortSpeed::Fs,
             1 => PortSpeed::Ls,
-            2 => PortSpeed::Fs,
+            2 => PortSpeed::Hs,
             _ => PortSpeed::Hs,
         }
     }
@@ -182,7 +178,7 @@ fn visit_default_depth(
         );
     }
 
-    if is_hub_device(dev_class, vid, pid) {
+    if dev_class == USB_CLASS_HUB || (vid == QEMU_USB_HUB_VID && pid == QEMU_USB_HUB_PID) {
         let hub_addr = st.take_addr()?;
         dwc2::Ep0::set_address(hub_addr, ep0_mps)?;
         dwc2::usb_post_set_address_delay();
@@ -241,7 +237,8 @@ fn visit_default_depth(
                 continue;
             }
             // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms；hub 完成 reset 后会自动置 C_PORT_RESET。
-            dwc2::usb_post_hub_port_reset_delay();
+            // USB TRSTRCY(端口复位后恢复时间)
+            crate::arch::time::delay(core::time::Duration::from_millis(100));
 
             // ④ 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
             let after = match hub_port_status_w0(&hub, u16::from(port)) {
@@ -271,8 +268,8 @@ fn visit_default_depth(
                 continue;
             }
 
-            // ⑤ 速度日志（实际运行摄像头为 FS;旧代码速度位解码有误标为 HS,
-            //    本驱动走 FS 单向轮询、无 split transaction 需求）。
+            // ⑤ 速度仅记日志（实际运行摄像头为 FS；本驱动走 FS 单向轮询、
+            //    无 split transaction 需求）。
 
             visit_default_depth(depth.saturating_add(1), hub_addr, port, st)?;
         }
@@ -307,11 +304,11 @@ fn visit_default_depth(
     Ok(())
 }
 
-/// 仅递归枚举并打印拓扑。
+/// 递归枚举整条总线并打印拓扑。
 ///
 /// # 返回值
 /// 扫描到的 UVC 摄像头；拓扑中无 Video 类设备时返回 `Err(Protocol)`。
-pub fn enumerate_bus_print_tree_only() -> UsbResult<UvcEnumerated> {
+pub fn enumerate_bus() -> UsbResult<UvcEnumerated> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
     let mut st = ScanState::new();

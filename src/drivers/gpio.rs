@@ -1,64 +1,62 @@
-//! GPIO 控制(精简版:只保留 GPIO1 的输出引脚操作)。
+//! GPIO 输出引脚控制（DW APB GPIO，`tock-registers` 封装，精简版：只留输出）。
 //!
-//! 从 sg200x-bsp/src/gpio.rs 精简而来(原 541 行 → 本文件)。
-//! 原版支持 4 个 GPIO 实例 + 中断 + debounce,这里只留最基本的输出设置。
-//!
-//! 寄存器(DW APB GPIO):
-//!   +0x000 数据寄存器(写 bit N = 设 pin N 电平)
-//!   +0x004 方向寄存器(1 = 输出)
-//!
-//! 用法(与原版 API 兼容):
-//! ```ignore
-//! let gpio = unsafe { GPIO::new(GPIO1_BASE) };
-//! gpio.pin(6).set_direction(Direction::Output);
-//! gpio.pin(6).set(true);
-//! ```
+//! 从 sg200x-bsp/src/gpio.rs 精简而来（原 541 行 → 本文件，去掉中断/debounce）。
+//! 寄存器布局：+0x000 数据寄存器 DR（写 bit N = 设 pin N 电平）、
+//! +0x004 方向寄存器 DDR（1 = 输出）。基址经 [`GPIO::new`] 注入——
+//! 现固件只用 GPIO1（`platform::GPIO1_BASE`）驱动 USB VBUS。
 
-use core::ptr::{read_volatile, write_volatile};
+use tock_registers::interfaces::ReadWriteable;
+use tock_registers::registers::ReadWrite;
+use tock_registers::{register_bitfields, register_structs};
 
-// 重导出 soc 常量(保持 platform.rs 导入路径兼容)
+register_bitfields![u32,
+    /// DR/DDR 共用布局：bit N = pin N（全 32 引脚单字段掩码）。
+    pub PIN [
+        /// 引脚位（bit N = pin N）。
+        VAL OFFSET(0) NUMBITS(32) [],
+    ],
+];
+
+register_structs! {
+    /// DW APB GPIO 寄存器映射（本固件只用 DR/DDR）。
+    pub GpioRegs {
+        (0x00 => pub dr: ReadWrite<u32, PIN::Register>),
+        (0x04 => pub ddr: ReadWrite<u32, PIN::Register>),
+        (0x08 => @END),
+    }
+}
 
 /// GPIO 驱动实例
 pub struct GPIO {
-    base: usize,
+    regs: &'static GpioRegs,
 }
 
 impl GPIO {
-    /// 创建 GPIO 实例(基址见 soc.rs 的 GPIO0~3_BASE)
+    /// 创建 GPIO 实例（基址由调用方传入，如 `platform::GPIO1_BASE`）
     pub unsafe fn new(base: usize) -> Self {
-        Self { base }
+        Self { regs: &*(base as *const GpioRegs) }
     }
 
     /// 获取指定引脚的句柄
     pub fn pin(&self, num: u8) -> Pin {
-        Pin { base: self.base, num }
+        Pin { regs: self.regs, num }
     }
 }
 
 /// 单个 GPIO 引脚
 pub struct Pin {
-    base: usize,
+    regs: &'static GpioRegs,
     num: u8,
 }
 
 impl Pin {
-    /// 设置方向
+    /// 设置方向为输出
     pub fn set_output_direction(&self) {
-        let ddr = (self.base + 0x004) as *mut u32;
-        unsafe {
-            let mask = 1u32 << self.num;
-            write_volatile(ddr, read_volatile(ddr) | mask);
-        }
+        self.regs.ddr.modify(PIN::VAL.val(1u32 << self.num));
     }
 
     /// 设置输出电平
     pub fn set(&self, high: bool) {
-        let dr = (self.base + 0x000) as *mut u32;
-        unsafe {
-            let mask = 1u32 << self.num;
-            let val = read_volatile(dr);
-            let val = if high { val | mask } else { val & !mask };
-            write_volatile(dr, val);
-        }
+        self.regs.dr.modify(PIN::VAL.val(if high { 1u32 << self.num } else { 0 }));
     }
 }
