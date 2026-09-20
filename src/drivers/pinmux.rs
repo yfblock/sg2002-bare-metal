@@ -7,7 +7,7 @@
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::registers::ReadWrite;
 
-use crate::drivers::soc::FMUX_BASE;
+use crate::platform::FMUX_BASE;
 
 register_bitfields![u32,
     /// FMUX 功能选择字段（bits [2:0]，每引脚一个寄存器）。

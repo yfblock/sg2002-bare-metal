@@ -18,6 +18,7 @@ use core::fmt::Write as _;
 use core::sync::atomic::Ordering;
 
 use crate::drivers::mailbox::{CTX_SLOT2, CTX_SLOT3};
+use crate::platform::UART0_BASE;
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::{ReadOnly, WriteOnly};
@@ -42,7 +43,6 @@ register_structs! {
 }
 
 /// UART0 MMIO 基址。
-const UART0_BASE: usize = 0x0414_0000;
 
 /// 取 UART0 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]

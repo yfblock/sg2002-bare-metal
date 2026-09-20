@@ -9,8 +9,8 @@ use tock_registers::{
 use core::time::Duration;
 
 use crate::arch::time::{delay, elapsed_since, rdtime};
+use crate::platform::JPU_REG_BASE;
 
-pub const JPU_REG_BASE: usize = 0x0B00_0000;
 
 register_bitfields![u32,
     /// VC（Video Codec）子块使能寄存器（bit0-4 = 各子块使能）。
@@ -171,10 +171,10 @@ pub fn jpu_regs() -> &'static JpuRegisters {
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
 /// 小核 identity 映射（VA=PA），不需要地址扩展。
 pub fn hardware_init_no_vd_remap() {
-    let top = crate::drivers::soc::top();
+    let top = crate::platform::top();
     // JPEG 时钟使能 + 复位释放(TOP 寄存器,soc.rs TopRegs 视图)
     top.clk_jpeg.set(top.clk_jpeg.get() | 0x3300); // RMW: OR JPEG 时钟使能
-    top.rst.modify(crate::drivers::soc::TOP_RST::JPEG::SET);
+    top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
     // VC 子块使能(bit0-4)
     vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));
 
@@ -198,13 +198,13 @@ pub fn hardware_init_no_vd_remap() {
 /// 只动 JPEG 的时钟/复位位和 VC 使能，**不写** `TOP_DDR_ADDR_MODE_OFF`
 /// （那会改 DDR 地址映射把大核搞崩）。
 pub fn hard_reset_at() {
-    let top = crate::drivers::soc::top();
+    let top = crate::platform::top();
     // 1) 拉低复位(清 JPEG release 位)
-    top.rst.modify(crate::drivers::soc::TOP_RST::JPEG::CLEAR);
+    top.rst.modify(crate::platform::TOP_RST::JPEG::CLEAR);
     delay(Duration::from_millis(1));
     // 2) 时钟使能后再释放复位
     top.clk_jpeg.set(0x3300);
-    top.rst.modify(crate::drivers::soc::TOP_RST::JPEG::SET);
+    top.rst.modify(crate::platform::TOP_RST::JPEG::SET);
     delay(Duration::from_millis(1));
     // 3) VC 子块重新使能
     vc().enable.modify(VC_ENABLE::BLOCKS.val(0x1F));

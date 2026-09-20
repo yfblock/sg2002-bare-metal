@@ -38,7 +38,7 @@ register_structs! {
 }
 
 /// WDT MMIO 基址（SG2002 dts `cv-wd@0x3010000`）。
-const WDT_BASE: usize = 0x0301_0000;
+use crate::platform::WDT_BASE;
 /// 喂狗魔法值（DW WDT 规定写 0x76 重装计数器）。
 const KICK_MAGIC: u32 = 0x76;
 

@@ -1,27 +1,86 @@
-//! USB 平台初始化：时钟 / PHY / VBUS / pinmux。
+//! SG2002 板级：SoC MMIO **地址表** + USB 平台初始化（时钟 / PHY / VBUS / pinmux）。
 //!
-//! 与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 的平台初始化等价，但裸机无 MMU
-//! （identity 映射，VA=PA）：DWC2/PHY 的 MMIO 基址由 USB 栈直接取
-//! `crate::drivers::soc` 常量，无需运行时安装。
-//!
-//! USB 平台**专用**的寄存器视图（CLKGEN 时钟门控 / IOBLK pad 驱动）收集在本模块；
-//! TOP 块与 JPU 时钟复位共享（`soc::top()`），视图留在 `drivers::soc`——驱动层不
-//! 反向依赖板级层。
+//! 全部外设物理基址集中在本模块（按物理地址升序），各驱动 `use crate::platform`
+//! 取用——BSP 风格单一事实来源；核内中断控制器（CLINT/PLIC）归 arch 层。
+//! 另带 USB 平台初始化（与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 等价,
+//! 裸机 identity 映射 VA=PA 无需运行时安装）与 TOP/CLKGEN/IOBLK 寄存器视图。
 use tock_registers::interfaces::{ReadWriteable, Writeable};
 use tock_registers::{register_bitfields, register_structs};
 use tock_registers::registers::ReadWrite;
 
-use crate::drivers::gpio::{GPIO, GPIO1_BASE};
+use crate::drivers::gpio::GPIO;
 use crate::drivers::pinmux;
-use crate::drivers::soc;
+
+// SoC MMIO 地址表（物理基址,升序）
+/// cvi 硬件邮箱控制器。
+pub const HW_MBOX_BASE: usize = 0x0190_0000;
+/// TOP 模块（系统顶层控制寄存器）。
+pub const TOP_BASE: usize = 0x0300_0000;
+/// FMUX（引脚功能复用）。
+pub const FMUX_BASE: usize = 0x0300_1000;
+/// IOBLK Group1（USB_VBUS_DET pad 配置块）。
+pub const IOBLK_G1_BASE: usize = 0x0300_1800;
+/// 时钟发生器（`clock-controller`，`cvitek,cv181x-clk`）。
+pub const CLKGEN_BASE: usize = 0x0300_2000;
+/// CV182x 片内 USB2 PHY（DTS `usb@04340000` 第二段 `reg`）。
+pub const CV182X_USB2_PHY_BASE: usize = 0x0300_6000;
+/// DW APB 看门狗（dts `cv-wd@0x3010000`）。
+pub const WDT_BASE: usize = 0x0301_0000;
+/// GPIO1 (GPIOB)，Active Domain。
+pub const GPIO1_BASE: usize = 0x0302_1000;
+/// UART0（DW APB 8250,32-bit 步长;U-Boot 已初始化）。
+pub const UART0_BASE: usize = 0x0414_0000;
+/// DWC2 USB OTG 控制器（DTS `usb@04340000` 第一段 `reg`）。
+pub const DWC2_BASE: usize = 0x0434_0000;
+/// IVE 智能视觉引擎。
+pub const IVE_BASE: usize = 0x0A0A_0000;
+/// JPU JPEG 编解码器。
+pub const JPU_REG_BASE: usize = 0x0B00_0000;
 
 // 模块常量
 const VBUS_GPIO_PIN: u8 = 6;
 const VBUS_GPIO_ACTIVE_HIGH: bool = true;
-/// IOBLK Group1 基址（USB_VBUS_DET pad 配置块）。
-const IOBLK_G1_BASE: usize = 0x0300_1800;
 
-// USB 平台专用寄存器视图（自 drivers/soc.rs 收集至此,单消费者）
+// TOP 块寄存器视图（与 JPU 时钟复位共享,自 drivers/soc.rs 收集至此）
+register_bitfields![u32,
+    /// TOP 复位寄存器（bit4: JPEG 复位释放; bit11: USB 复位）。
+    pub TOP_RST [
+        JPEG OFFSET(4) NUMBITS(1) [],
+        USB OFFSET(11) NUMBITS(1) [],
+    ],
+    /// TOP USB pin 模式（bit0: device/host 模式, bit6/7: PHY ID pad）。
+    pub TOP_USB_PIN [
+        MODE OFFSET(0) NUMBITS(1) [],
+        PHY_ID OFFSET(6) NUMBITS(2) [],
+    ],
+    /// TOP ECO 寄存器（bit7: USB eco）。
+    pub TOP_ECO [
+        USB OFFSET(7) NUMBITS(1) [],
+    ],
+];
+
+register_structs! {
+    /// TOP 级控制（复位/USB pin/ECO）。
+    pub TopRegs {
+        (0x000 => _reserved000: [u32; 18]),
+        (0x048 => pub usb_pin: ReadWrite<u32, TOP_USB_PIN::Register>),
+        (0x04c => _reserved04c: [u32; 26]),
+        (0x0b4 => pub eco: ReadWrite<u32, TOP_ECO::Register>),
+        (0x0b8 => _reserved0b8: [u32; 2004]),
+        (0x2008 => pub clk_jpeg: ReadWrite<u32>),
+        (0x200c => _reserved200c: [u32; 1021]),
+        (0x3000 => pub rst: ReadWrite<u32, TOP_RST::Register>),
+        (0x3004 => @END),
+    }
+}
+
+/// TOP 级控制视图（基址 `TOP_BASE`,编译期常量恒有效）。
+#[inline]
+pub fn top() -> &'static TopRegs {
+    unsafe { &*(TOP_BASE as *const TopRegs) }
+}
+
+// USB 平台专用寄存器视图
 register_bitfields![u32,
     /// CLKGEN 时钟使能寄存器 1（bit28-31: USB 相关时钟门控）。
     pub CLKGEN_EN1 [
@@ -62,10 +121,10 @@ register_structs! {
     }
 }
 
-/// CLKGEN 视图（基址 `soc::CLKGEN_BASE`,编译期常量恒有效）。
+/// CLKGEN 视图（编译期常量恒有效）。
 #[inline]
 fn clkgen() -> &'static ClkgenRegs {
-    unsafe { &*(soc::CLKGEN_BASE as *const ClkgenRegs) }
+    unsafe { &*(CLKGEN_BASE as *const ClkgenRegs) }
 }
 
 /// IOBLK Group1 视图。
@@ -96,20 +155,20 @@ unsafe fn enable_usb_clocks_cv181x() {
 
 /// PHY ID pad toggle workaround：先写 device 再写 host。
 unsafe fn cvitek_usb_top_host_bringup() {
-    let top = soc::top();
+    let top = top();
     // USB 复位脉冲：拉低 → 释放
-    top.rst.modify(soc::TOP_RST::USB::CLEAR);
+    top.rst.modify(TOP_RST::USB::CLEAR);
     crate::arch::time::delay(core::time::Duration::from_micros(50));
-    top.rst.modify(soc::TOP_RST::USB::SET);
+    top.rst.modify(TOP_RST::USB::SET);
     crate::arch::time::delay(core::time::Duration::from_micros(50));
 
     // PHY_ID=11(device)→11 保持,再切 PHY_ID=01(host);MODE 位均为 host 驱动
-    top.usb_pin.modify(soc::TOP_USB_PIN::MODE::SET + soc::TOP_USB_PIN::PHY_ID.val(0b11));
+    top.usb_pin.modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b11));
     crate::arch::time::delay(core::time::Duration::from_millis(1));
-    top.usb_pin.modify(soc::TOP_USB_PIN::MODE::SET + soc::TOP_USB_PIN::PHY_ID.val(0b01));
+    top.usb_pin.modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b01));
     crate::arch::time::delay(core::time::Duration::from_millis(1));
 
-    top.eco.modify(soc::TOP_ECO::USB::SET);
+    top.eco.modify(TOP_ECO::USB::SET);
 }
 
 fn pinmux_usb_vbus_det_gpio_output_prep() {

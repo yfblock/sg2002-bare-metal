@@ -18,9 +18,8 @@
 //! ├── logger.rs     跨核 UART 控制台(DW8250 + 打印 + Dekker 行锁)+ log 门面
 //! ├── yuv_buf.rs    共享 YUV/RGB 缓冲布局
 //! ├── panic.rs      panic handler
-//! ├── platform.rs   板级(SG2002):USB PHY/时钟/VBUS/pinmux 初始化
+//! ├── platform.rs   板级(SG2002):SoC MMIO 地址表 + USB PHY/时钟/VBUS/pinmux 初始化
 //! └── drivers/      从 sg200x-bsp 迁移的硬件驱动
-//!     ├── soc       MMIO 基址常量
 //!     ├── mailbox   cvi 硬件邮箱控制器(门铃/认领/跨核锁槽)
 //!     ├── wdt        DW APB 看门狗(wedge 自愈复位)
 //!     ├── pinmux    引脚复用(USB VBUS)

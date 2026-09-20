@@ -17,7 +17,6 @@
 use core::ptr::{read_volatile, write_volatile};
 
 // 重导出 soc 常量(保持 platform.rs 导入路径兼容)
-pub use crate::drivers::soc::GPIO1_BASE;
 
 /// GPIO 驱动实例
 pub struct GPIO {

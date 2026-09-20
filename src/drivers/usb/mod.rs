@@ -6,7 +6,7 @@
 //! - [`topology`]：Hub 描述符解析与端口递归枚举。
 //!
 //! 单板裸机、identity 映射（VA=PA）：控制器/PHY MMIO 基址直接取
-//! [`crate::drivers::soc`] 的常量，无需运行时配置。
+//! [`crate::platform`] 的地址表常量，无需运行时配置。
 //!
 //! # 公共子模块
 //!
@@ -15,7 +15,7 @@
 //!
 //! # 寄存器视图
 //!
-//! - [`dwc2_regs`]：DWC2 全局寄存器视图（基址 = [`crate::drivers::soc::DWC2_BASE`]）。
+//! - [`dwc2_regs`]：DWC2 全局寄存器视图（基址 = [`crate::platform::DWC2_BASE`]）。
 //! - [`dwc2_channel`]：主机通道寄存器块（**0** = EP0 控制、**1** = Isoch 视频）。
 //! - [`cv182x_phy_regs`]：CV182x（SG2002）片内 USB2 PHY 视图。
 //!
@@ -41,7 +41,7 @@ pub use enumerate::enumerate_topology_only;
 /// 取 DWC2 全局寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
 pub fn dwc2_regs() -> &'static Dwc2Regs {
-    unsafe { &*(crate::drivers::soc::DWC2_BASE as *const Dwc2Regs) }
+    unsafe { &*(crate::platform::DWC2_BASE as *const Dwc2Regs) }
 }
 
 /// 取第 `ch` 号主机通道寄存器块。
@@ -61,6 +61,6 @@ pub fn dwc2_channel(ch: u32) -> &'static Dwc2HostChannel {
 /// 取 CV182x 片内 USB2 PHY 寄存器视图（基址为编译期常量，恒有效）。
 #[inline]
 pub fn cv182x_phy_regs() -> &'static Cv182xUsb2Phy {
-    unsafe { &*(crate::drivers::soc::CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) }
+    unsafe { &*(crate::platform::CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) }
 }
 

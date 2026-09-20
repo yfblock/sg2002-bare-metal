@@ -22,7 +22,7 @@ use tock_registers::{register_bitfields, register_structs};
 use crate::arch::time::{elapsed_since, rdtime};
 
 /// IVE 寄存器基址。
-const IVE_BASE: usize = 0x0A0A_0000;
+use crate::platform::IVE_BASE;
 
 register_bitfields![u32,
     /// TOP +0x04：软复位 / 启动。

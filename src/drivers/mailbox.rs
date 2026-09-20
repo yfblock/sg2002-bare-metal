@@ -18,7 +18,7 @@ use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::{ReadOnly, ReadWrite, WriteOnly};
 
 /// 控制器 MMIO 基址。
-pub const HW_MBOX_BASE: usize = 0x0190_0000;
+use crate::platform::HW_MBOX_BASE;
 
 /// CPU 编号（cvi_mailbox.h）：0=CA53，1=C906B 大核，2=C906L 小核。
 pub const CPU_BIG: usize = 1;
