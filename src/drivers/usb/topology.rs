@@ -42,17 +42,18 @@ macro_rules! topo_log {
 ///
 /// - 若为 **Hub**：分配地址、读 Hub 描述符、给各端口上电、`PORT_RESET` 后递归
 ///   [`visit_default_depth`]（仅支持下游 **HS** 设备，FS/LS 会跳过并打日志）。
-/// - 若为 **功能设备**：把 UVC 候选写入 `ScanState`。
+/// - 若为 **功能设备**：被类驱动接管则作为返回值上抛(多台先到先得)。
 ///
-/// `parent_hub==0` 且 `port_on_hub==0` 表示根口直连。
+/// `parent_hub==0` 且 `port_on_hub==0` 表示根口直连。`next_addr` 为共享
+/// 地址分配游标(递归全程穿过);返回本子树被接管的设备(无则 None)。
 fn visit_default_depth(
     depth: u8,
     parent_hub: u8,
     port_on_hub: u8,
     speed: super::hub::PortSpeed,
-    st: &mut super::device::ScanState,
-) -> UsbResult<()> {
-    let dev = super::device::enumerate_device(speed, st)?;
+    next_addr: &mut u8,
+) -> UsbResult<Option<super::device::UsbDevice>> {
+    let dev = super::device::enumerate_device(speed, next_addr)?;
 
     if parent_hub == 0 && port_on_hub == 0 {
         topo_log!(
@@ -93,6 +94,7 @@ fn visit_default_depth(
         // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
         crate::arch::time::delay(hub_dev.pwr_good() + core::time::Duration::from_millis(100));
 
+        let mut claimed: Option<super::device::UsbDevice> = None;
         for port in 1..=nports {
             let status = match hub_dev.port_status_w0(port) {
                 Ok(s) => s,
@@ -155,9 +157,10 @@ fn visit_default_depth(
             //    无 split transaction 需求）。
 
             let child_speed = super::hub::PortSpeed::from_status(after);
-            visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, st)?;
+            let sub = visit_default_depth(depth.saturating_add(1), hub_addr, port, child_speed, next_addr)?;
+            claimed = claimed.or(sub); // 多台候选先到先得
         }
-        return Ok(());
+        return Ok(claimed);
     }
 
     // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者胜出,
@@ -171,12 +174,10 @@ fn visit_default_depth(
     if let Some(driver) = super::device::DRIVERS.iter().find(|d| d.matches(&dev)) {
         topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
             driver.name(), dev.ep0.dev());
-        if st.taken.is_none() {
-            st.taken = Some(dev);
-        }
+        return Ok(Some(dev));
     }
 
-    Ok(())
+    Ok(None)
 }
 
 /// 递归枚举整条总线并打印拓扑。
@@ -186,11 +187,10 @@ fn visit_default_depth(
 pub fn enumerate_bus(root_speed: super::hub::PortSpeed) -> UsbResult<super::device::UsbDevice> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
-    let mut st = super::device::ScanState::new();
-    let visit = visit_default_depth(0, 0, 0, root_speed, &mut st);
+    let mut next_addr: u8 = 1;
+    let visit = visit_default_depth(0, 0, 0, root_speed, &mut next_addr);
     log::info!("[USB] topology: scan finished.");
-    visit?;
-    match st.taken {
+    match visit? {
         Some(cam) => Ok(cam),
         None => Err(UsbError::Protocol("no device claimed by any class driver")),
     }

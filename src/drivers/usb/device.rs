@@ -39,38 +39,15 @@ impl UsbDevice {
     }
 }
 
-/// 枚举上下文：USB 地址分配器 + 类驱动接管记录。递归遍历全程穿过。
-pub(crate) struct ScanState {
-    next_free_addr: u8,
-    /// 首台被类驱动接管的功能设备(多台候选时先到先得)。
-    /// 驱动无关——「谁接管」由 [`DRIVERS`] 注册表判定,这里只记结果。
-    pub(crate) taken: Option<UsbDevice>,
-}
-
-impl ScanState {
-    pub(crate) const fn new() -> Self {
-        Self {
-            next_free_addr: 1,
-            taken: None,
-        }
-    }
-
-    /// 分配下一个 USB 设备地址（单调递增，耗尽报错）。
-    pub(crate) fn take_addr(&mut self) -> UsbResult<u8> {
-        let addr = self.next_free_addr;
-        if addr >= MAX_USB_ADDR {
-            return Err(UsbError::Protocol("usb address space full"));
-        }
-        self.next_free_addr = self.next_free_addr.saturating_add(1);
-        Ok(addr)
-    }
-}
-
 /// 公共枚举序列（在默认地址 0 上）：探测 → `SET_ADDRESS` → `SET_CONFIGURATION`
 /// → 读首接口类，产出完整设备身份。hub 与功能设备共用。
-pub(crate) fn enumerate_device(speed: PortSpeed, st: &mut ScanState) -> UsbResult<UsbDevice> {
+pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResult<UsbDevice> {
     let (vid, pid, ep0_mps, dev_class) = Ep0::probe_default_addr()?;
-    let addr = st.take_addr()?;
+    let addr = *next_addr;
+    if addr >= MAX_USB_ADDR {
+        return Err(UsbError::Protocol("usb address space full"));
+    }
+    *next_addr = addr.saturating_add(1);
     Ep0::set_address(addr, ep0_mps)?;
     dwc2::usb_post_set_address_delay();
     let ep0 = Ep0::new(u32::from(addr), ep0_mps);
@@ -108,7 +85,7 @@ fn first_interface_class(ep: &Ep0) -> UsbResult<u8> {
 /// 类驱动：声明对已枚举功能设备的匹配条件。
 ///
 /// 注册表 [`DRIVERS`] 顺序即优先级;首个 `matches` 的驱动胜出,
-/// 接管记录由遍历层写入 [`ScanState::taken`]——驱动无状态、无副作用。
+/// 接管设备沿遍历返回值上抛——驱动无状态、无副作用。
 /// (将来驱动需要接管动作/类初始化时再扩 `probe`,需求拉动。)
 pub trait DeviceDriver: Sync {
     fn name(&self) -> &'static str;
