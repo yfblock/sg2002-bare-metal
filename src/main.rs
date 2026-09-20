@@ -64,17 +64,19 @@ pub(crate) extern "C" fn rust_main() -> ! {
     unsafe { arch::trap::init_interrupts() };
 
     // UVC 初始化(同步,一次性)
-    uvc::set_preferred_frame_size(640, 480);
-    uvc::set_preferred_max_pixels(640 * 480);
-    uvc::set_preferred_frame_interval(333_333);
-
     let cam = enumerate_topology_only().expect("enum");
     let ep0 = Ep0::new(u32::from(cam.addr), cam.ep0_mps);
 
     let cfg_buf = uvc::read_configuration_descriptor(&ep0, 1).expect("read cfg");
     let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
     let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
-    let mut sel = uvc::parse_uvc_video_stream(cfg, cfg_total).expect("parse stream");
+    let prefs = uvc::UvcPrefs {
+        frame_w: 640,
+        frame_h: 480,
+        max_pixels: 640 * 480,
+        frame_interval: 333_333, // ≈30fps:给廉价 webcam 更多曝光/ISP 余量
+    };
+    let mut sel = uvc::parse_uvc_video_stream(cfg, cfg_total, &prefs).expect("parse stream");
 
     if let Some(ent) = uvc::parse_uvc_control_entities(cfg, cfg_total) {
         let tune = uvc::UvcImageTuning {

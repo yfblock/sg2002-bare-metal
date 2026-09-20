@@ -6,10 +6,6 @@ use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup;
 
-use super::prefs::{
-    PREFERRED_FRAME_H, PREFERRED_FRAME_INTERVAL, PREFERRED_FRAME_W, PREFERRED_MAX_PIXELS,
-};
-
 const USB_DT_INTERFACE: u8 = 4;
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
@@ -61,7 +57,7 @@ pub struct UvcStreamSelection {
     pub isoch_alts: [(u8, u16); 8],
 }
 
-/// 根据 `PREFERRED_FRAME_INTERVAL` 从某 frame 描述符的可用 interval 集合中选最接近的值。
+/// 根据偏好 interval 从某 frame 描述符的可用 interval 集合中选最接近的值。
 ///
 /// 返回 0 表示未设偏好（调用方沿用 `min_ival`）。`i` 为该 VS_FRAME 描述符在 `cfg` 中的起始
 /// 偏移，`bl` 为其 `bLength`；`ival_type`>0 为离散列表（其后跟 `ival_type` 个 u32），
@@ -73,8 +69,8 @@ fn choose_frame_interval(
     dflt_ival: u32,
     _min_ival: u32,
     ival_type: u8,
+    pref: u32,
 ) -> u32 {
-    let pref = PREFERRED_FRAME_INTERVAL.load(core::sync::atomic::Ordering::Relaxed);
     if pref == 0 {
         return 0;
     }
@@ -141,7 +137,22 @@ pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult
 /// 端点选择 **Isoch IN**(取带宽最高的 alt)。
 ///
 /// 同时把所有 VS 候选打到串口，便于诊断。
-pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStreamSelection> {
+/// 选流偏好。全 0 字段 = 不启用对应偏好(退回内置打分表)。
+///
+/// - `frame_w`/`frame_h` 同时非 0:精确匹配该尺寸的 frame 得最高分;
+///   典型:JPU DMA pool 把可硬件解码的分辨率限制在 ~640×480,超出 `jpu_alloc` 失败
+/// - `max_pixels`:非 0 时按"≤ 上限越接近越好、超出倒扣"打分
+/// - `frame_interval`(100ns 单位,UVC `dwFrameInterval`):非 0 时从各 frame
+///   的可用 interval 中选**最接近**值而非默认最小间隔(最高 fps)。
+///   典型 `333_333` ≈ 30 fps——给廉价 webcam 更多曝光/ISP 余量
+pub struct UvcPrefs {
+    pub frame_w: u16,
+    pub frame_h: u16,
+    pub max_pixels: u32,
+    pub frame_interval: u32,
+}
+
+pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) -> UsbResult<UvcStreamSelection> {
     let len = cfg_total.min(cfg.len());
     if len < 12 {
         return Err(UsbError::Protocol("cfg too short"));
@@ -243,18 +254,18 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                 }
                 // 选定本 frame 描述符实际使用的 interval：
                 // 设了 PREFERRED_FRAME_INTERVAL 时选最接近它的可用值；否则沿用最小（最高 fps）。
-                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, min_ival, ival_type);
+                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, min_ival, ival_type, prefs.frame_interval);
                 let dflt_ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
                 let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
                 let is_mjpeg = cur_fmt_subtype_for_frame == VS_FORMAT_MJPEG
                     || st == VS_FRAME_MJPEG;
-                fn rank((_, _, pw, ph, _): (u8, u8, u16, u16, u32)) -> i32 {
+                let rank = |(_, _, pw, ph, _): (u8, u8, u16, u16, u32)| -> i32 {
                     let w = pw as i32;
                     let h = ph as i32;
                     let area = w * h;
-                    // ① 精确尺寸优先：set_preferred_frame_size 设过后，精确匹配得最高分。
-                    let pref_w = PREFERRED_FRAME_W.load(core::sync::atomic::Ordering::Relaxed);
-                    let pref_h = PREFERRED_FRAME_H.load(core::sync::atomic::Ordering::Relaxed);
+                    // ① 精确尺寸优先：设过 frame_w/h 后，精确匹配得最高分。
+                    let pref_w = prefs.frame_w;
+                    let pref_h = prefs.frame_h;
                     if pref_w != 0 && pref_h != 0 {
                         let pw_i = pref_w as i32;
                         let ph_i = pref_h as i32;
@@ -269,8 +280,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                             -(area - pref_area)
                         };
                     }
-                    let pref_max =
-                        PREFERRED_MAX_PIXELS.load(core::sync::atomic::Ordering::Relaxed) as i32;
+                    let pref_max = prefs.max_pixels as i32;
                     if pref_max > 0 {
                         // 设了上限：area <= pref_max 时越接近越好；超过则按超出量倒扣分。
                         return if area <= pref_max {
@@ -285,7 +295,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize) -> UsbResult<UvcStre
                     if w == 1024 && h == 768 { return 750_000; }
                     if w == 320 && h == 240 { return 700_000; }
                     if area <= 1280 * 720 { 600_000 - (1280 * 720 - area) } else { 100_000 - (area - 1280 * 720) }
-                }
+                };
                 if is_mjpeg {
                     let pick_better = match mjpeg_pick {
                         None => true,
