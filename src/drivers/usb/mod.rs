@@ -27,6 +27,7 @@ use crate::drivers::usb::dwc2::regs::{Dwc2HostChannel, Dwc2Regs, DWC2_MAX_HOST_C
 use crate::drivers::usb::dwc2::regs::Cv182xUsb2Phy;
 
 pub mod error;
+pub mod hub;
 pub mod setup;
 
 pub mod dwc2;

@@ -33,27 +33,18 @@
 #![recursion_limit = "512"]
 #![no_main]
 
-// 架构层(RV64 M-mode)
 mod arch;
-
-// 应用层
 mod yuv_buf;
 mod logger;
 mod panic;
-
-// 大小核通信
 mod ipc;
-
-// 小核硬件
 mod platform;
-
-// 硬件驱动(从 sg200x-bsp 迁移)
 mod drivers;
-/// FPS 报告间隔(帧数)
-const FPS_REPORT_EVERY: u32 = 100;
 
 use crate::drivers::usb::{dwc2::{self, Ep0}, uvc};
 use crate::drivers::usb::enumerate_camera;
+
+const FPS_REPORT_EVERY: u32 = 100;
 
 #[no_mangle]
 pub(crate) extern "C" fn rust_main() -> ! {

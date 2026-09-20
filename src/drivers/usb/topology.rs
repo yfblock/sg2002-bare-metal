@@ -4,6 +4,7 @@
 //! 返回 [`UvcEnumerated`]（扫描到的 UVC 摄像头；未找到 = Err）。MSC 候选扫描已随 Bulk/MSC 路径移除，
 //! 需要时见 sg200x-bsp 的 `topology.rs`。
 
+use super::hub::Hub;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup;
@@ -14,9 +15,6 @@ const QEMU_USB_HUB_VID: u16 = 0x0409;
 const QEMU_USB_HUB_PID: u16 = 0x55aa;
 
 const MAX_USB_ADDR: u8 = 127;
-/// Hub 描述符 bNbrPorts 上限(防描述符异常值撑爆定长数组)。
-const MAX_HUB_PORTS: u8 = 16;
-
 #[derive(Clone, Copy, Debug)]
 pub struct UvcEnumerated {
     pub addr: u8,
@@ -98,50 +96,6 @@ fn first_interface_class(ep: &dwc2::Ep0) -> UsbResult<u8> {
     Ok(0)
 }
 
-/// Hub 描述符关键字段：端口数、`bPwrOn2PwrGood`（2ms 单位的端口上电稳定时间）。
-struct HubInfo {
-    nports: u8,
-    pwr_on_2_pwr_good_ms: u32,
-}
-
-fn hub_info(ep: &dwc2::Ep0) -> UsbResult<HubInfo> {
-    let mut buf = [0u8; 64];
-    ep.read(setup::get_descriptor_hub(64), &mut buf)?;
-    if buf[0] < 7 || buf[1] != setup::USB_DT_HUB {
-        return Err(UsbError::Protocol("invalid hub descriptor"));
-    }
-    let nports = buf[2].min(MAX_HUB_PORTS);
-    let pwr_on = u32::from(buf[5]).saturating_mul(2);
-    Ok(HubInfo {
-        nports,
-        pwr_on_2_pwr_good_ms: pwr_on,
-    })
-}
-
-fn hub_port_status_w0(ep: &dwc2::Ep0, port: u16) -> UsbResult<u16> {
-    let mut buf = [0u8; 4];
-    ep.read(setup::hub_get_port_status(port), &mut buf)?;
-    Ok(u16::from_le_bytes([buf[0], buf[1]]))
-}
-
-/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`，§11.24.2.1）：
-/// 00=full-speed, 01=low-speed, 10=high-speed。
-enum PortSpeed { Hs, Fs, Ls }
-
-impl PortSpeed {
-    fn from_status(status: u16) -> Self {
-        match (status >> 9) & 3 {
-            0 => PortSpeed::Fs,
-            1 => PortSpeed::Ls,
-            2 => PortSpeed::Hs,
-            _ => PortSpeed::Hs,
-        }
-    }
-    fn as_str(&self) -> &'static str {
-        match self { PortSpeed::Hs => "HS", PortSpeed::Fs => "FS", PortSpeed::Ls => "LS" }
-    }
-}
-
 /// 在默认地址 **0** 上枚举一台设备：`SET_ADDRESS` → `SET_CONFIGURATION` → 打印信息。
 ///
 /// - 若为 **Hub**：分配地址、读 Hub 描述符、给各端口上电、`PORT_RESET` 后递归
@@ -187,24 +141,23 @@ fn visit_default_depth(
         topo_log!(depth, "[USB]   -> Hub enumerated addr={} ep0_mps={}",
             hub_addr, ep0_mps);
 
-        let info = hub_info(&hub)?;
-        let nports = info.nports;
-        let pwr_good_ms = info.pwr_on_2_pwr_good_ms.max(20); // 给 ≥20ms 富余
+        let hub_dev = super::hub::DeviceHub::new(&hub)?;
+        let nports = hub_dev.nports();
+        let pwr_good_ms = hub_dev.pwr_good_ms().max(20); // 给 ≥20ms 富余
         topo_log!(depth, "[USB]   -> Hub descriptor: {} downstream port(s), PwrOn2PwrGood={} ms",
             nports, pwr_good_ms);
 
-        // ① 给所有下游端口供电：USB 2.0 spec §11.11.1：hub 上电后端口默认 PowerOff，
-        //    必须由 host 显式 SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
+        // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
         for port in 1..=nports {
-            if let Err(e) = hub.hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_POWER) {
+            if let Err(e) = hub_dev.port_power(port) {
                 topo_log!(depth, "[USB]   -> port {} POWER fail: {:?}", port, e);
             }
         }
         // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
-        crate::arch::time::delay(core::time::Duration::from_millis(pwr_good_ms.saturating_add(100) as u64));
+        crate::arch::time::delay(hub_dev.pwr_good() + core::time::Duration::from_millis(100));
 
         for port in 1..=nports {
-            let status = match hub_port_status_w0(&hub, u16::from(port)) {
+            let status = match hub_dev.port_status_w0(port) {
                 Ok(s) => s,
                 Err(e) => {
                     topo_log!(
@@ -216,7 +169,7 @@ fn visit_default_depth(
                     continue;
                 }
             };
-            let conn = status & 1 != 0;
+            let conn = status & super::hub::W0_CONNECTION != 0;
             topo_log!(
                 depth,
                 "[USB]   -> port {} wPortStatus={:#06x} {}",
@@ -228,19 +181,14 @@ fn visit_default_depth(
                 continue;
             }
 
-            // ③ 清 C_PORT_CONNECTION（连接变化位），再 PORT_RESET
-            let _ = hub.hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_CONNECTION);
-
-            if let Err(e) = hub.hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_RESET) {
-                topo_log!(depth, "[USB]   -> port {} RESET fail: {:?}", port, e);
+            // ③④ 清连接变化 → 复位并等稳定(TDRSTR/TRSTRCY) → 清复位变化
+            if let Err(e) = super::hub::connect_reset_sequence(&hub_dev, port) {
+                topo_log!(depth, "[USB]   -> port {} reset sequence: {:?}", port, e);
                 continue;
             }
-            // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms；hub 完成 reset 后会自动置 C_PORT_RESET。
-            // USB TRSTRCY(端口复位后恢复时间)
-            crate::arch::time::delay(core::time::Duration::from_millis(100));
 
-            // ④ 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
-            let after = match hub_port_status_w0(&hub, u16::from(port)) {
+            // 读端口状态：必须 PORT_ENABLE=1，否则 reset 失败
+            let after = match hub_dev.port_status_w0(port) {
                 Ok(s) => s,
                 Err(e) => {
                     topo_log!(
@@ -252,9 +200,8 @@ fn visit_default_depth(
                     continue;
                 }
             };
-            let _ = hub.hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_RESET);
-            let enabled = (after >> 1) & 1 != 0;
-            let speed = PortSpeed::from_status(after);
+            let enabled = after & super::hub::W0_ENABLE != 0;
+            let speed = super::hub::PortSpeed::from_status(after);
             topo_log!(
                 depth,
                 "[USB]   -> port {} after-reset wPortStatus={:#06x} ENABLED={} SPD={}",

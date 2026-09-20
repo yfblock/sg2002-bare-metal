@@ -1,0 +1,214 @@
+//! 统一 Hub 端口抽象：根 hub（DWC2 `HPRT0`）与外部 hub（USB hub 类请求经 EP0）
+//! 的端口操作归一到 [`Hub`] trait，枚举序列（[`wait_connect`] /
+//! [`connect_reset_sequence`]）对两种上游无差别——多态调用点真实存在。
+//!
+//! 状态统一为 USB 2.0 §11.24.2 `wPortStatus` word0 布局（根口现场转换，
+//! Linux `dwc2_hcd_hub_control` 同款做法）。
+
+use core::time::Duration;
+
+use tock_registers::interfaces::Readable;
+
+use super::dwc2::{self, regs::HPRT0};
+use super::error::{UsbError, UsbResult};
+use super::setup;
+
+/// `wPortStatus[0]`：当前连接。
+pub const W0_CONNECTION: u16 = 1 << 0;
+/// `wPortStatus[1]`：端口已使能。
+pub const W0_ENABLE: u16 = 1 << 1;
+/// `wPortStatus[4]`：复位进行中。
+pub const W0_RESET: u16 = 1 << 4;
+
+/// 统一 Hub：端口号取值 `1..=nports`。
+pub trait Hub {
+    /// 下游端口数。
+    fn nports(&self) -> u8;
+    /// 端口上电（外部 hub `SET_FEATURE(PORT_POWER)`；根口在 `dwc2_host_init`
+    /// 内已完成，恒成功）。
+    fn port_power(&self, port: u8) -> UsbResult<()>;
+    /// 读端口状态 word0（统一布局；根口 `HPRT0` 现场转换）。
+    fn port_status_w0(&self, port: u8) -> UsbResult<u16>;
+    /// 复位端口并**等待稳定**（根口 `PRTRST` 脉冲含自带时序；外部 hub
+    /// `SET_FEATURE(PORT_RESET)` + `TDRSTR`/`TRSTRCY` 等待）。
+    fn reset_port(&self, port: u8) -> UsbResult<()>;
+    /// 清 CONNECTION 变化位（根口 no-op——复位脉冲内已 W1C；外部
+    /// `CLEAR_FEATURE(C_PORT_CONNECTION)`）。
+    fn clear_connection_change(&self, port: u8) -> UsbResult<()>;
+    /// 清 RESET 变化位（根口 no-op——`PRTRST` 自清；外部
+    /// `CLEAR_FEATURE(C_PORT_RESET)`）。
+    fn clear_reset_change(&self, port: u8) -> UsbResult<()>;
+    /// 端口上电稳定时间（外部 hub 描述符 `bPwrOn2PwrGood`；根口常驻供电，0）。
+    fn pwr_good(&self) -> Duration;
+}
+
+/// 根 hub：DWC2 控制器自身（单端口、寄存器固定地址——本类型仅作 trait
+/// 分发标记，无字段；根口操作实现委托 `dwc2` 模块）。
+pub struct RootHub;
+
+impl Hub for RootHub {
+    fn nports(&self) -> u8 {
+        1
+    }
+
+    fn port_power(&self, _port: u8) -> UsbResult<()> {
+        Ok(()) // dwc2_host_init 已置 HPRT0.PWR
+    }
+
+    fn port_status_w0(&self, _port: u8) -> UsbResult<u16> {
+        let p = dwc2::hprt0();
+        let mut w0 = 0u16;
+        if p.is_set(HPRT0::CONNSTS) {
+            w0 |= W0_CONNECTION;
+        }
+        if p.is_set(HPRT0::ENA) {
+            w0 |= W0_ENABLE;
+        }
+        if p.is_set(HPRT0::RST) {
+            w0 |= W0_RESET;
+        }
+        Ok(w0)
+    }
+
+    fn reset_port(&self, _port: u8) -> UsbResult<()> {
+        Ok(dwc2::dwc2_host_root_bus_reset_pulse())
+    }
+
+    fn clear_connection_change(&self, _port: u8) -> UsbResult<()> {
+        Ok(()) // CONNDET W1C 在复位脉冲内完成
+    }
+
+    fn clear_reset_change(&self, _port: u8) -> UsbResult<()> {
+        Ok(()) // PRTRST 释放时自清
+    }
+
+    fn pwr_good(&self) -> Duration {
+        Duration::ZERO
+    }
+}
+
+/// Hub 描述符 `bNbrPorts` 上限（防描述符异常值撑爆遍历）。
+const MAX_HUB_PORTS: u8 = 16;
+
+/// 外部 hub：绑定已寻址的 [`dwc2::Ep0`] 与其描述符信息。
+pub struct DeviceHub<'a> {
+    ep0: &'a dwc2::Ep0,
+    nports: u8,
+    /// `bPwrOn2PwrGood` 已换算的毫秒数。
+    pwr_on_pwr_good_ms: u32,
+}
+
+impl<'a> DeviceHub<'a> {
+    /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
+    pub fn new(ep0: &'a dwc2::Ep0) -> UsbResult<Self> {
+        let mut buf = [0u8; 64];
+        ep0.read(setup::get_descriptor_hub(64), &mut buf)?;
+        if buf[0] < 7 || buf[1] != setup::USB_DT_HUB {
+            return Err(UsbError::Protocol("invalid hub descriptor"));
+        }
+        Ok(Self {
+            ep0,
+            nports: buf[2].min(MAX_HUB_PORTS),
+            pwr_on_pwr_good_ms: u32::from(buf[5]).saturating_mul(2),
+        })
+    }
+
+    /// 描述符里的上电稳定毫秒数（供日志）。
+    pub fn pwr_good_ms(&self) -> u32 {
+        self.pwr_on_pwr_good_ms
+    }
+}
+
+impl Hub for DeviceHub<'_> {
+    fn nports(&self) -> u8 {
+        self.nports
+    }
+
+    fn port_power(&self, port: u8) -> UsbResult<()> {
+        // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
+        // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
+        self.ep0
+            .hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_POWER)
+    }
+
+    fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
+        let mut buf = [0u8; 4];
+        self.ep0
+            .read(setup::hub_get_port_status(u16::from(port)), &mut buf)?;
+        Ok(u16::from_le_bytes([buf[0], buf[1]]))
+    }
+
+    fn reset_port(&self, port: u8) -> UsbResult<()> {
+        self.ep0
+            .hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_RESET)?;
+        // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
+        // TRSTRCY（复位解除到首次事务）一并等待。
+        crate::arch::time::delay(Duration::from_millis(100));
+        Ok(())
+    }
+
+    fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
+        self.ep0
+            .hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_CONNECTION)
+    }
+
+    fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
+        self.ep0
+            .hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_RESET)
+    }
+
+    fn pwr_good(&self) -> Duration {
+        Duration::from_millis(u64::from(self.pwr_on_pwr_good_ms))
+    }
+}
+
+/// USB 2.0 hub 端口速度位（`wPortStatus[10:9]`，§11.24.2.1）：
+/// 00=full-speed, 01=low-speed, 10=high-speed。
+pub enum PortSpeed {
+    Hs,
+    Fs,
+    Ls,
+}
+
+impl PortSpeed {
+    pub fn from_status(status: u16) -> Self {
+        match (status >> 9) & 3 {
+            0 => PortSpeed::Fs,
+            1 => PortSpeed::Ls,
+            _ => PortSpeed::Hs,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PortSpeed::Hs => "HS",
+            PortSpeed::Fs => "FS",
+            PortSpeed::Ls => "LS",
+        }
+    }
+}
+
+/// 轮询等待端口报告连接（按时上限，命中返回 true）。
+pub fn wait_connect(hub: &dyn Hub, port: u8, timeout: Duration) -> bool {
+    let t0 = crate::arch::time::rdtime();
+    loop {
+        if let Ok(w0) = hub.port_status_w0(port) {
+            if w0 & W0_CONNECTION != 0 {
+                return true;
+            }
+        }
+        if crate::arch::time::elapsed_since(t0) >= timeout {
+            return false;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+/// 端口「清连接变化 → 复位并等稳定 → 清复位变化」统一序列，
+/// 对根口与外部 hub 无差别。
+pub fn connect_reset_sequence(hub: &dyn Hub, port: u8) -> UsbResult<()> {
+    hub.clear_connection_change(port)?;
+    hub.reset_port(port)?;
+    hub.clear_reset_change(port)?;
+    Ok(())
+}
