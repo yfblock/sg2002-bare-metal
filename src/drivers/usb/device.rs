@@ -39,18 +39,19 @@ impl UsbDevice {
     }
 }
 
-/// 枚举状态：USB 地址分配器 + 各驱动接管的设备。
+/// 枚举上下文：USB 地址分配器 + 类驱动接管记录。递归遍历全程穿过。
 pub(crate) struct ScanState {
     next_free_addr: u8,
-    /// UVC 驱动接管的首台摄像头。
-    pub(crate) uvc: Option<UsbDevice>,
+    /// 首台被类驱动接管的功能设备(多台候选时先到先得)。
+    /// 驱动无关——「谁接管」由 [`DRIVERS`] 注册表判定,这里只记结果。
+    pub(crate) taken: Option<UsbDevice>,
 }
 
 impl ScanState {
     pub(crate) const fn new() -> Self {
         Self {
             next_free_addr: 1,
-            uvc: None,
+            taken: None,
         }
     }
 
@@ -104,18 +105,18 @@ fn first_interface_class(ep: &Ep0) -> UsbResult<u8> {
     Ok(0)
 }
 
-/// 类驱动：对已枚举的功能设备做匹配与接管。
+/// 类驱动：声明对已枚举功能设备的匹配条件。
 ///
-/// 注册表 [`DRIVERS`] 顺序即优先级；首个 `matches` 的驱动 `probe` 接管。
+/// 注册表 [`DRIVERS`] 顺序即优先级;首个 `matches` 的驱动胜出,
+/// 接管记录由遍历层写入 [`ScanState::taken`]——驱动无状态、无副作用。
+/// (将来驱动需要接管动作/类初始化时再扩 `probe`,需求拉动。)
 pub trait DeviceDriver: Sync {
     fn name(&self) -> &'static str;
     /// 匹配判定（接口类/设备类/VID:PID）。
     fn matches(&self, dev: &UsbDevice) -> bool;
-    /// 接管设备（记录候选等）；`Err` 中断总线遍历。
-    fn probe(&self, dev: &UsbDevice, st: &mut ScanState) -> UsbResult<()>;
 }
 
-/// UVC 摄像头驱动：首个 Video(0x0e) 类功能设备胜出。
+/// UVC 摄像头驱动：Video(0x0e) 类功能设备。
 struct UvcCameraDriver;
 
 impl DeviceDriver for UvcCameraDriver {
@@ -125,13 +126,6 @@ impl DeviceDriver for UvcCameraDriver {
 
     fn matches(&self, dev: &UsbDevice) -> bool {
         dev.iface_class == setup::USB_CLASS_VIDEO
-    }
-
-    fn probe(&self, dev: &UsbDevice, st: &mut ScanState) -> UsbResult<()> {
-        if st.uvc.is_none() {
-            st.uvc = Some(*dev);
-        }
-        Ok(())
     }
 }
 

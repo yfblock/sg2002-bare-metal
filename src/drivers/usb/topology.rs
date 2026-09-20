@@ -160,19 +160,19 @@ fn visit_default_depth(
         return Ok(());
     }
 
-    // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者接管)。
+    // 普通功能设备:类驱动注册表分发(顺序即优先级,首个匹配者胜出,
+    // 接管记录写遍历上下文——驱动自身无状态)。
     topo_log!(
         depth,
         "[USB]   -> function addr={} first_ifc_class={:02x}",
         dev.ep0.dev(),
         dev.iface_class
     );
-    for driver in super::device::DRIVERS {
-        if driver.matches(&dev) {
-            topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
-                driver.name(), dev.ep0.dev());
-            driver.probe(&dev, st)?;
-            break;
+    if let Some(driver) = super::device::DRIVERS.iter().find(|d| d.matches(&dev)) {
+        topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
+            driver.name(), dev.ep0.dev());
+        if st.taken.is_none() {
+            st.taken = Some(dev);
         }
     }
 
@@ -190,8 +190,8 @@ pub fn enumerate_bus(root_speed: super::hub::PortSpeed) -> UsbResult<super::devi
     let visit = visit_default_depth(0, 0, 0, root_speed, &mut st);
     log::info!("[USB] topology: scan finished.");
     visit?;
-    match st.uvc {
+    match st.taken {
         Some(cam) => Ok(cam),
-        None => Err(UsbError::Protocol("no UVC camera in topology")),
+        None => Err(UsbError::Protocol("no device claimed by any class driver")),
     }
 }
