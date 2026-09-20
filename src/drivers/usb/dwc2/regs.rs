@@ -229,7 +229,6 @@ register_bitfields![u32,
     ],
 ];
 
-
 register_structs! {
     /// 单个主机通道寄存器块（占 0x20 字节，基址 = `Dwc2Regs.hc_base + n * 0x20`）。
     pub Dwc2HostChannel {

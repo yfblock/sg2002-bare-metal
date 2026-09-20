@@ -32,7 +32,7 @@ const ITT_CAMERA: u16 = 0x0201;
 
 const ENDPOINT_ATTR_ISOCH: u8 = 1;
 
-// ---------- 视频流参数 ----------
+// 视频流参数
 
 /// 解析得到的 VS 流参数(仅 Isoch;Bulk 已删除)。
 #[derive(Clone, Debug)]
@@ -444,7 +444,7 @@ pub(crate) fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
     }
 }
 
-// ---------- VC 实体 ----------
+// VC 实体
 
 /// `parse_uvc_control_entities` 的输出：UVC VideoControl 接口及其下的实体 ID/支持位。
 #[derive(Clone, Debug, Default)]

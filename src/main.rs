@@ -34,22 +34,22 @@
 #![recursion_limit = "512"]
 #![no_main]
 
-// ---- 架构层(RV64 M-mode) ----
+// 架构层(RV64 M-mode)
 mod arch;
 
-// ---- 应用层 ----
+// 应用层
 mod jpu;
 mod yuv_buf;
 mod logger;
 mod panic;
 
-// ---- 大小核通信 ----
+// 大小核通信
 mod ipc;
 
-// ---- 小核硬件 ----
+// 小核硬件
 mod platform;
 
-// ---- 硬件驱动(从 sg200x-bsp 迁移)----
+// 硬件驱动(从 sg200x-bsp 迁移)
 mod drivers;
 
 use crate::drivers::usb::{dwc2::{self, Ep0}, uvc};
@@ -57,7 +57,7 @@ use crate::drivers::usb::enumerate_topology_only;
 
 #[no_mangle]
 pub(crate) extern "C" fn rust_main() -> ! {
-    // ---- trap 入口 + 基础初始化 ----
+    // trap 入口 + 基础初始化
     unsafe { arch::trap::init_mtvec() };
     logger::init();
     logger::print("=== C906L UVC+JPU start ===\n");
@@ -65,7 +65,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
     platform::platform_init();
     unsafe { arch::trap::init_interrupts() };
 
-    // ---- UVC 初始化(同步,一次性)----
+    // UVC 初始化(同步,一次性)
     uvc::set_preferred_frame_size(640, 480);
     uvc::set_preferred_max_pixels(640 * 480);
     uvc::set_preferred_frame_interval(333_333);
@@ -88,7 +88,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
     uvc::uvc_start_video_stream(&ep0, &mut sel).expect("start stream");
     let _ = uvc::uvc_capture_one_frame(&ep0, &sel); // warmup
 
-    // ---- 进入主循环(永不返回)----
+    // 进入主循环(永不返回)
     pipeline_loop(&ep0, &sel)
 }
 
@@ -138,10 +138,10 @@ fn pipeline_loop(ep0: &Ep0, sel: &uvc::UvcStreamSelection) -> ! {
                 st.cap += crate::arch::time::elapsed_since(t_cap0);
                 st.byte_acc += uvc::take_frame_bytes().max(n as u32) as u64;
 
-                // ---- decode + notify ----
+                // decode + notify
                 decode_and_notify(n, frame_count, &mut st);
 
-                // ---- FPS 报告 ----
+                // FPS 报告
                 if frame_count.wrapping_sub(st.fps_mark_frame) >= FPS_REPORT_EVERY {
                     report_fps(frame_count, &mut st);
                 }

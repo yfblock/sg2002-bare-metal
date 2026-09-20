@@ -12,7 +12,6 @@ use crate::arch::time::{delay, elapsed_since, rdtime};
 
 pub const JPU_REG_BASE: usize = 0x0B00_0000;
 
-
 register_bitfields![u32,
     /// VC（Video Codec）子块使能寄存器（bit0-4 = 各子块使能）。
     pub VC_ENABLE [
@@ -33,7 +32,6 @@ register_structs! {
 fn vc() -> &'static VcRegs {
     unsafe { &*(0x0B03_0000 as *const VcRegs) }
 }
-
 
 const JPU_WARMUP_BBC_BASE: u32 = 0x8026_C000;
 

@@ -169,8 +169,7 @@ pub fn dwc2_host_root_bus_reset_pulse() -> UsbResult<()> {
     Ok(())
 }
 
-
-// --- CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）---
+// CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）
 
 fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();

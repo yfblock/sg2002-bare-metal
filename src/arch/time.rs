@@ -44,7 +44,7 @@ pub fn elapsed_since(t0: u64) -> Duration {
     Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
-// ---- CLINT mtimer 心跳（wedge 观测）----
+// CLINT mtimer 心跳（wedge 观测）
 //
 // 每 10ms 一拍：心跳 +1、采样被中断 PC，写入邮箱 ctx 的两个协议空闲字
 // （MMIO 非缓存，大核 mmio_read32 实时可见，无需 cache 维护）：

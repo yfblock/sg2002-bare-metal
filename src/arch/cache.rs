@@ -11,9 +11,7 @@ const CACHE_LINE: usize = 64;
 #[cfg(target_feature = "zicbom")]
 compile_error!("RISC-V `zicbom` 标准缓存指令与 C906 自定义编码冲突，请关闭 zicbom。");
 
-// ============================================================================
 // (1) 按行精细维护：dcache.cva / dcache.iva（C906 非标指令）
-// ============================================================================
 
 #[inline(always)]
 unsafe fn dcache_cva(va: usize) {
@@ -61,9 +59,7 @@ pub fn dcache_invalidate_range(start: usize, size: usize) {
     riscv::asm::fence();
 }
 
-// ============================================================================
 // (2) 粗粒度 DMA 一致性：dcache.ciall 全清
-// ============================================================================
 
 /// `dcache.ciall` 清洗并无效全部 D-Cache（与 ArceOS `dma.md` 示例一致）。
 #[inline(always)]

@@ -54,8 +54,6 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
     }
 }
 
-
-
 /// 把 MJPEG 解码成 YUV422 并写入指定 slot 的共享 DRAM。
 ///
 /// `slot` = 0/1，决定 JPU DMA 写入哪个双缓冲 slot。

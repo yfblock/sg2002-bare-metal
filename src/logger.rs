@@ -54,7 +54,7 @@ pub(crate) fn uart_putc(c: u8) {
     uart_regs().thr.set(c as u32);
 }
 
-// ---- 跨核行锁(Dekker,纯 load/store)----
+// 跨核行锁(Dekker,纯 load/store)
 // 锁变量在邮箱 context slot2/3(MMIO 非缓存,两核直读直写一致)。
 // 注:曾试 amoswap.w —— 小核(M-mode)可用,但大核(S-mode)对该 MMIO 段
 // 触发异常(go 后首条打印即挂),故改 Dekker 两进程互斥(不依赖 AMO):
@@ -186,7 +186,7 @@ pub(crate) fn print_fmt(args: core::fmt::Arguments<'_>) {
     line_unlock();
 }
 
-// ---- `log` 门面 ----
+// `log` 门面
 
 struct UartLogger;
 static LOGGER: UartLogger = UartLogger;
