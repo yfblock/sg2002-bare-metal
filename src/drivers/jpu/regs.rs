@@ -159,7 +159,7 @@ register_structs! {
     }
 }
 
-/// 取 JPU 寄存器视图（[`GPIO::new`] 同款：由调用方传入已映射的 MMIO 基址）。
+/// 取 JPU 寄存器视图（[`crate::drivers::gpio::GPIO::new`] 同款：由调用方传入已映射的 MMIO 基址）。
 #[inline]
 pub fn jpu_regs() -> &'static JpuRegisters {
     unsafe { &*(JPU_REG_BASE as *const JpuRegisters) }
@@ -167,7 +167,7 @@ pub fn jpu_regs() -> &'static JpuRegisters {
 
 /// TOP JPEG 时钟、复位、DDR remap 与 VC 子块使能，并完成 JPU 软复位。
 /// 设时钟/复位/VC，但**不设 VD_REMAP**。
-/// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr[39:32]），
+/// 适用于小核（C906L）：VD_REMAP 是 8-bit 字段（bit24-31，表示 addr\[39:32\]），
 /// 设为 1 会让 32 位 DMA 地址变成 (1<<32)|addr，超出 256MB DDR 范围。
 /// 小核 identity 映射（VA=PA），不需要地址扩展。
 pub fn hardware_init_no_vd_remap() {

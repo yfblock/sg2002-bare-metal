@@ -56,7 +56,7 @@ impl JpuDecoder {
     /// JPU 挂死/解码出错后的硬件恢复：给 JPEG 块一次真正的复位脉冲。
     ///
     /// 光靠软复位（START_INIT）或重跑 `hardware_init_*` 都救不回来——后者只
-    /// "释放"复位位，对已在运行的块是空操作。详见 [`regs::hard_reset_at`]。
+    /// "释放"复位位，对已在运行的块是空操作。详见 [`crate::drivers::jpu::regs::hard_reset_at`]。
     pub fn recover(&mut self) {
         super::regs::hard_reset_at();
     }

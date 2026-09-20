@@ -124,7 +124,7 @@ pub fn hprt0() -> &'static ReadWrite<u32, HPRT0::Register> {
 ///
 /// 写前做两件事，均不可省：
 /// 1. 屏蔽 W1C 位——`ENA` 等位读回的 1 表示"已使能"，写 1 的含义却是
-///    "禁用/清除"，不清掉会误禁用端口（[`HPRT0_W1C_MASK`]）；
+///    "禁用/清除"，不清掉会误禁用端口（`HPRT0_W1C_MASK`）；
 /// 2. 清掉目标字段位——否则 `rst=false` 这种 CLEAR 语义写不进去。
 fn hprt0_port(pwr: bool, rst: bool) {
     usb::dwc2_regs().hprt0.modify(
@@ -308,9 +308,9 @@ fn cv182x_usb2_phy_host_clear_utmi_override() {
 
 /// M1：软复位、强制 Host、FIFO、GAHB、HCFG、根口上电（及 CV182x PHY 下拉）。
 ///
-/// **不在此处** 发 USB 总线复位：应在确认 [`hprt_connsts`] 后调用 [`dwc2_host_root_bus_reset_pulse`]。
+/// **不在此处** 发 USB 总线复位：应在确认 [`hprt0`] 的 `CONNSTS` 后调用 [`dwc2_host_root_bus_reset_pulse`]。
 ///
-/// 成功返回 Ok，不保证已有设备连接；请读 [`dwc2_hprt0_read`] 的 `CONNSTS`。
+/// 成功返回 Ok，不保证已有设备连接；请读 [`hprt0`] 的 `CONNSTS`。
 pub fn dwc2_host_init() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
     dwc2.gintmsk.set(0);

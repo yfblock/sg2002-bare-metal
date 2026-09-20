@@ -148,7 +148,7 @@ pub struct JpegHeaderInfo {
     pub width: u32,
     pub height: u32,
     pub num_components: u32,
-    /// SOF0 各分量采样因子 (h, v)，顺序 Y/Cb/Cr；1 分量时只有 [0] 有效。
+    /// SOF0 各分量采样因子 (h, v)，顺序 Y/Cb/Cr；1 分量时只有 \[0\] 有效。
     pub sampling: [(u8, u8); 3],
     pub format: u32,
     pub ecs_offset: usize,

@@ -22,12 +22,12 @@ impl<T> SyncUnsafeCell<T> {
     }
 }
 
-/// 解码分步计时：`decode()` 每走一步累计耗时，由 [FPS] 报告输出。
+/// 解码分步计时：`decode()` 每走一步累计耗时，由 \[FPS\] 报告输出。
 pub mod trace {
     use core::sync::atomic::{AtomicU64, Ordering};
     use core::time::Duration;
 
-    /// 步号（仅保留 [FPS] 报告实际读取的 5 步）。
+    /// 步号（仅保留 \[FPS\] 报告实际读取的 5 步）。
     pub mod step {
         pub const COPY_STREAM: u32 = 3;
         pub const CLEAN_STREAM: u32 = 4;
