@@ -10,6 +10,13 @@ use tock_registers::{
 pub const DWC2_MAX_HOST_CHANNELS: usize = 16;
 
 register_bitfields![u32,
+    /// GSNPSID（Synopsys 产品识别）:高 16 位产品魔数（0x4f54 = "OTG"）,
+    /// 低 16 位核心版本号（Linux 以版本号分界软复位序列/GDFIFOCFG 配置）。
+    pub GSNPSID [
+        PRODUCT_ID OFFSET(16) NUMBITS(16) [],
+        VERSION OFFSET(0) NUMBITS(16) [],
+    ],
+
     /// AHB 总线配置（DMA、突发长度、全局中断使能）。
     pub GAHBCFG [
         GLBL_INTR_EN OFFSET(0) NUMBITS(1) [],
@@ -176,7 +183,7 @@ register_structs! {
         (0x024 => pub grxfsiz: ReadWrite<u32, GRXFSIZ::Register>),
         (0x028 => pub gnptxfsiz: ReadWrite<u32, GNPTXFSIZ::Register>),
         (0x02c => _reserved02c),
-        (0x040 => pub gsnpsid: ReadOnly<u32>),
+        (0x040 => pub gsnpsid: ReadOnly<u32, GSNPSID::Register>),
         (0x044 => _reserved044),
         (0x048 => pub ghwcfg2: ReadOnly<u32, GHWCFG2::Register>),
         (0x04c => pub ghwcfg3: ReadOnly<u32, GHWCFG3::Register>),

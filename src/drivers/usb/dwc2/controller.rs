@@ -15,13 +15,14 @@ use core::time::Duration;
 
 use crate::arch::time::delay;
 use crate::drivers::usb;
-const DWC2_CORE_REV_2_91A: u32 = 0x4f54_291a;
-/// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 此版本用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
-const DWC2_CORE_REV_4_20A: u32 = 0x4f54_420a;
-const DWC2_CORE_REV_MASK: u32 = 0xffff;
+/// GDFIFOCFG 配置分界（Linux `core.h`/`hcd.c`:版本 ≥ 2.91a 时写 GDFIFOCFG）。
+const DWC2_CORE_REV_2_91A: u32 = 0x291a;
+/// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
+const DWC2_CORE_REV_4_20A: u32 = 0x420a;
 use super::ch::{poll_until, spin_delay};
 use tock_registers::registers::ReadWrite;
 use super::regs::{
+    GSNPSID,
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
     GUSBCFG, HCFG, HPRT0,
 };
@@ -47,8 +48,7 @@ fn dbg_dwc2_init_timeout(phase: &'static str) {
 // Linux `core.h`：`snpsid >= 0x4f54291a` 时配置 `GDFIFOCFG`（`hcd.c`）。
 
 fn wait_ahb_idle() -> UsbResult<()> {
-    let dwc2 = usb::dwc2_regs();
-    if poll_until(3_000_000, 32, || dwc2.grstctl.is_set(GRSTCTL::AHBIDLE)) {
+    if poll_until(3_000_000, 32, || usb::dwc2_regs().grstctl.is_set(GRSTCTL::AHBIDLE)) {
         return Ok(());
     }
     dbg_dwc2_init_timeout("wait_ahb_idle");
@@ -58,9 +58,7 @@ fn wait_ahb_idle() -> UsbResult<()> {
 fn core_soft_reset() -> UsbResult<()> {
     wait_ahb_idle()?;
     let dwc2 = usb::dwc2_regs();
-    let snpsid = dwc2.gsnpsid.get();
-    let core_rev = snpsid & DWC2_CORE_REV_MASK;
-    let new_rst_seq = core_rev >= (DWC2_CORE_REV_4_20A & DWC2_CORE_REV_MASK);
+    let new_rst_seq = dwc2.gsnpsid.read(GSNPSID::VERSION) >= DWC2_CORE_REV_4_20A;
 
     dwc2.grstctl.modify(GRSTCTL::CSFTRST::SET);
 
@@ -192,9 +190,8 @@ fn init_host_fifos_cv182x() -> UsbResult<()> {
     dwc2.hptxfsiz
         .write(HPTXFSIZ::PTXFDEP.val(ptx) + HPTXFSIZ::PTXFSTADDR.val(rx + nptx));
 
-    let snpsid = dwc2.gsnpsid.get();
     let ded = dwc2.ghwcfg4.is_set(GHWCFG4::DED_FIFO_EN);
-    if ded && snpsid >= DWC2_CORE_REV_2_91A {
+    if ded && dwc2.gsnpsid.read(GSNPSID::VERSION) >= DWC2_CORE_REV_2_91A {
         let epbase = rx.wrapping_add(nptx).wrapping_add(ptx);
         dwc2.gdfifocfg.modify(GDFIFOCFG::EPINFOBASE.val(epbase));
     }
