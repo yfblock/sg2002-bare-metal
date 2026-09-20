@@ -5,18 +5,24 @@
 //! 本模块统一「端口后面的设备是什么、谁接管」。
 
 use super::dwc2::{self, Ep0};
+use super::setup;
 use super::error::{UsbError, UsbResult};
 use super::hub::PortSpeed;
-use super::setup;
 
-/// USB Hub 类码（`bDeviceClass`）。
-const USB_CLASS_HUB: u8 = 0x09;
 /// QEMU 默认 `usb-hub`（插在根口与外设之间）VID/PID。
 const QEMU_USB_HUB_VID: u16 = 0x0409;
 const QEMU_USB_HUB_PID: u16 = 0x55aa;
 
 /// USB 地址上限（7 位寻址）。
 const MAX_USB_ADDR: u8 = 127;
+/// `bDeviceClass`：Hub。
+pub const USB_CLASS_HUB: u8 = 0x09;
+/// 接口类：Video（UVC 驱动的匹配条件）。
+pub const USB_CLASS_VIDEO: u8 = 0x0E;
+/// `bDescriptorType`：接口描述符（首接口类扫描用）。
+pub const USB_DT_INTERFACE: u8 = 4;
+/// `bDescriptorType`：配置描述符（GET_DESCRIPTOR 的 wValue 高字节）。
+pub const USB_DT_CONFIGURATION: u8 = 2;
 
 /// 一台已枚举设备：身份 + 控制端点句柄（枚举后身份不再散架为元组）。
 #[derive(Clone, Copy)]
@@ -74,7 +80,7 @@ fn first_interface_class(ep: &Ep0) -> UsbResult<u8> {
             break;
         }
         let ty = buf[i + 1];
-        if ty == setup::USB_DT_INTERFACE && i + 6 <= buf.len() {
+        if ty == USB_DT_INTERFACE && i + 6 <= buf.len() {
             return Ok(buf[i + 5]);
         }
         i = i.saturating_add(bl);
@@ -102,7 +108,7 @@ impl DeviceDriver for UvcCameraDriver {
     }
 
     fn matches(&self, dev: &UsbDevice) -> bool {
-        dev.iface_class == setup::USB_CLASS_VIDEO
+        dev.iface_class == USB_CLASS_VIDEO
     }
 }
 

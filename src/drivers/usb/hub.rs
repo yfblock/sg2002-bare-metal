@@ -12,7 +12,16 @@ use tock_registers::interfaces::Readable;
 use super::device::{enumerate_device, UsbDevice};
 use super::dwc2::{self, regs::HPRT0};
 use super::error::{UsbError, UsbResult};
-use super::setup;
+/// Hub 端口特性：`PORT_RESET`。
+const HUB_PORT_FEATURE_RESET: u16 = 4;
+/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
+const HUB_PORT_FEATURE_POWER: u16 = 8;
+/// Hub 端口特性：`C_PORT_CONNECTION`（连接变化位，CLEAR 用）。
+const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
+/// Hub 端口特性：`C_PORT_RESET`。
+const HUB_PORT_FEATURE_C_RESET: u16 = 20;
+/// Hub 类描述符类型（`GET_DESCRIPTOR(Hub)` 的 wValue 高字节）。
+const USB_DT_HUB: u8 = 0x29;
 
 /// `wPortStatus[0]`：当前连接。
 pub const W0_CONNECTION: u16 = 1 << 0;
@@ -177,8 +186,8 @@ impl<'a> DeviceHub<'a> {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
     pub fn new(ep0: &'a dwc2::Ep0) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
-        ep0.read(setup::get_descriptor_hub(64), &mut buf)?;
-        if buf[0] < 7 || buf[1] != setup::USB_DT_HUB {
+        ep0.read(hub_get_descriptor(64), &mut buf)?;
+        if buf[0] < 7 || buf[1] != USB_DT_HUB {
             return Err(UsbError::Protocol("invalid hub descriptor"));
         }
         Ok(Self {
@@ -202,20 +211,17 @@ impl Hub for DeviceHub<'_> {
     fn port_power(&self, port: u8) -> UsbResult<()> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
-        self.ep0
-            .hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_POWER)
+        self.ep0.hub_set_port_feature(u16::from(port), HUB_PORT_FEATURE_POWER)
     }
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0
-            .read(setup::hub_get_port_status(u16::from(port)), &mut buf)?;
+        self.ep0.read(hub_get_port_status(u16::from(port)), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
-        self.ep0
-            .hub_set_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_RESET)?;
+        self.ep0.hub_set_port_feature(u16::from(port), HUB_PORT_FEATURE_RESET)?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
         crate::arch::time::delay(Duration::from_millis(100));
@@ -224,12 +230,11 @@ impl Hub for DeviceHub<'_> {
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
         self.ep0
-            .hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_CONNECTION)
+            .hub_clear_port_feature(u16::from(port), HUB_PORT_FEATURE_C_CONNECTION)
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0
-            .hub_clear_port_feature(u16::from(port), setup::HUB_PORT_FEATURE_C_RESET)
+        self.ep0.hub_clear_port_feature(u16::from(port), HUB_PORT_FEATURE_C_RESET)
     }
 
     fn pwr_good(&self) -> Duration {
@@ -265,3 +270,41 @@ impl PortSpeed {
 }
 
 
+
+// ---- Hub 类 SETUP 构造（与 UVC 类构造同款形态,归本模块）----
+
+/// `wValue`/`wIndex`/`wLength` 的 16 位小端拆分。
+#[inline]
+fn wle(v: u16) -> [u8; 2] {
+    v.to_le_bytes()
+}
+
+/// Hub：`SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
+#[inline]
+pub(crate) fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
+    let [fl, fh] = wle(feature);
+    let [pl, ph] = wle(port);
+    [0x23, 0x03, fl, fh, pl, ph, 0, 0]
+}
+
+/// Hub：`CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
+#[inline]
+pub(crate) fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
+    let [fl, fh] = wle(feature);
+    let [pl, ph] = wle(port);
+    [0x23, 0x01, fl, fh, pl, ph, 0, 0]
+}
+
+/// Hub：`GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
+#[inline]
+pub(crate) fn hub_get_port_status(port: u16) -> [u8; 8] {
+    let [pl, ph] = wle(port);
+    [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
+}
+
+/// Hub：`GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符。
+#[inline]
+pub(crate) fn hub_get_descriptor(w_length: u16) -> [u8; 8] {
+    let [ll, lh] = wle(w_length);
+    [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
+}

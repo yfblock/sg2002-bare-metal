@@ -126,14 +126,14 @@ impl Ep0 {
     ///
     /// # 参数
     /// - `port`：下游端口号（从 1 开始）。
-    /// - `feature`：Hub 端口特性选择子（如 [`setup::HUB_PORT_FEATURE_POWER`]）。
+    /// 构造器在 [`crate::drivers::usb::hub`](hub 类构造与端口操作同模块)。
     pub fn hub_set_port_feature(&self, port: u16, feature: u16) -> UsbResult<()> {
-        self.write_no_data(setup::hub_set_port_feature(port, feature))
+        self.write_no_data(crate::drivers::usb::hub::hub_set_port_feature(port, feature))
     }
 
     /// 对 **已寻址** Hub 发送 `CLEAR_PORT_FEATURE`（清除 `C_PORT_*` 等变化位）。
     pub fn hub_clear_port_feature(&self, port: u16, feature: u16) -> UsbResult<()> {
-        self.write_no_data(setup::hub_clear_port_feature(port, feature))
+        self.write_no_data(crate::drivers::usb::hub::hub_clear_port_feature(port, feature))
     }
 
     /// 无数据阶段控制传输：`SETUP` + `STATUS` IN（零长度）。

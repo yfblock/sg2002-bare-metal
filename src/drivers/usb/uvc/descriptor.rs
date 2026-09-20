@@ -4,6 +4,7 @@
 
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
+use crate::drivers::usb::device;
 use crate::drivers::usb::setup;
 
 const USB_DT_ENDPOINT: u8 = 5;
@@ -113,7 +114,7 @@ fn choose_frame_interval(
 pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
     ep.read(setup::get_descriptor_configuration(cfg_index, 9), &mut hdr)?;
-    if hdr[1] != setup::USB_DT_CONFIGURATION {
+    if hdr[1] != device::USB_DT_CONFIGURATION {
         return Err(UsbError::Protocol("not a configuration descriptor"));
     }
     let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
@@ -178,13 +179,13 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
         }
         let ty = cfg[i + 1];
 
-        if ty == setup::USB_DT_INTERFACE && bl >= 9 {
+        if ty == device::USB_DT_INTERFACE && bl >= 9 {
             cur_ifc_num = cfg[i + 2];
             cur_alt = cfg[i + 3];
             cur_ifc_class = cfg[i + 5];
             cur_ifc_sub = cfg[i + 6];
         } else if ty == CS_INTERFACE
-            && cur_ifc_class == setup::USB_CLASS_VIDEO
+            && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
             let st = cfg.get(i + 2).copied().unwrap_or(0);
@@ -283,7 +284,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
                 }
             }
         } else if ty == USB_DT_ENDPOINT
-            && cur_ifc_class == setup::USB_CLASS_VIDEO
+            && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
             let ep_addr = cfg[i + 2];
@@ -460,16 +461,16 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
         }
         let ty = cfg[i + 1];
 
-        if ty == setup::USB_DT_INTERFACE && bl >= 9 {
+        if ty == device::USB_DT_INTERFACE && bl >= 9 {
             cur_ifc_num = cfg[i + 2];
             cur_ifc_class = cfg[i + 5];
             cur_ifc_sub = cfg[i + 6];
-            if cur_ifc_class == setup::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
+            if cur_ifc_class == device::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
                 out.vc_interface = cur_ifc_num;
                 found_vc = true;
             }
         } else if ty == CS_INTERFACE
-            && cur_ifc_class == setup::USB_CLASS_VIDEO
+            && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL
             && bl >= 3
         {
