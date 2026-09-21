@@ -2,6 +2,7 @@
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
 use super::ch::Channel;
+use crate::drivers::usb::hub::{hub_setup, HubRequest};
 use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
 use tock_registers::fields::FieldValue;
@@ -128,12 +129,12 @@ impl Ep0 {
     /// - `port`：下游端口号（从 1 开始）。
     /// 构造器在 [`crate::drivers::usb::hub`](hub 类构造与端口操作同模块)。
     pub fn hub_set_port_feature(&self, port: u16, feature: u16) -> UsbResult<()> {
-        self.write_no_data(crate::drivers::usb::hub::hub_set_port_feature(port, feature))
+        self.write_no_data(hub_setup(HubRequest::SetPortFeature { port, feature }))
     }
 
     /// 对 **已寻址** Hub 发送 `CLEAR_PORT_FEATURE`（清除 `C_PORT_*` 等变化位）。
     pub fn hub_clear_port_feature(&self, port: u16, feature: u16) -> UsbResult<()> {
-        self.write_no_data(crate::drivers::usb::hub::hub_clear_port_feature(port, feature))
+        self.write_no_data(hub_setup(HubRequest::ClearPortFeature { port, feature }))
     }
 
     /// 无数据阶段控制传输：`SETUP` + `STATUS` IN（零长度）。

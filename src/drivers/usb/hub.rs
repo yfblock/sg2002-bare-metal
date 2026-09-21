@@ -194,7 +194,7 @@ impl<'a> DeviceHub<'a> {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
     pub fn new(ep0: &'a dwc2::Ep0) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
-        ep0.read(hub_get_descriptor(64), &mut buf)?;
+        ep0.read(hub_setup(HubRequest::GetHubDescriptor { w_length: 64 }), &mut buf)?;
         if buf[0] < 7 || buf[1] != USB_DT_HUB {
             return Err(UsbError::Protocol("invalid hub descriptor"));
         }
@@ -224,7 +224,7 @@ impl Hub for DeviceHub<'_> {
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0.read(hub_get_port_status(u16::from(port)), &mut buf)?;
+        self.ep0.read(hub_setup(HubRequest::GetPortStatus { port: u16::from(port) }), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
@@ -279,34 +279,41 @@ impl PortSpeed {
 
 
 
-// ---- Hub 类 SETUP 构造（与 UVC 类构造同款形态,归本模块）----
+// ---- Hub 类 SETUP 构造（归本模块;与标准/UVC 构造同为纯函数）----
 
-/// Hub：`SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
-#[inline]
-pub(crate) fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
-    let [fl, fh] = feature.to_le_bytes();
-    let [pl, ph] = port.to_le_bytes();
-    [0x23, 0x03, fl, fh, pl, ph, 0, 0]
+/// Hub 类控制请求;由 [`hub_setup`] 构造 8 字节 SETUP 包。
+pub(crate) enum HubRequest {
+    /// `SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
+    SetPortFeature { port: u16, feature: u16 },
+    /// `CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
+    ClearPortFeature { port: u16, feature: u16 },
+    /// `GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
+    GetPortStatus { port: u16 },
+    /// `GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符。
+    GetHubDescriptor { w_length: u16 },
 }
 
-/// Hub：`CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
+/// 按 [`HubRequest`] 构造 8 字节 SETUP 包。
 #[inline]
-pub(crate) fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
-    let [fl, fh] = feature.to_le_bytes();
-    let [pl, ph] = port.to_le_bytes();
-    [0x23, 0x01, fl, fh, pl, ph, 0, 0]
-}
-
-/// Hub：`GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
-#[inline]
-pub(crate) fn hub_get_port_status(port: u16) -> [u8; 8] {
-    let [pl, ph] = port.to_le_bytes();
-    [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
-}
-
-/// Hub：`GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符。
-#[inline]
-pub(crate) fn hub_get_descriptor(w_length: u16) -> [u8; 8] {
-    let [ll, lh] = w_length.to_le_bytes();
-    [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
+pub(crate) fn hub_setup(req: HubRequest) -> [u8; 8] {
+    match req {
+        HubRequest::SetPortFeature { port, feature } => {
+            let [fl, fh] = feature.to_le_bytes();
+            let [pl, ph] = port.to_le_bytes();
+            [0x23, 0x03, fl, fh, pl, ph, 0, 0]
+        }
+        HubRequest::ClearPortFeature { port, feature } => {
+            let [fl, fh] = feature.to_le_bytes();
+            let [pl, ph] = port.to_le_bytes();
+            [0x23, 0x01, fl, fh, pl, ph, 0, 0]
+        }
+        HubRequest::GetPortStatus { port } => {
+            let [pl, ph] = port.to_le_bytes();
+            [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
+        }
+        HubRequest::GetHubDescriptor { w_length } => {
+            let [ll, lh] = w_length.to_le_bytes();
+            [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
+        }
+    }
 }
