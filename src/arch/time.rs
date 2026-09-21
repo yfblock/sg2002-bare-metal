@@ -85,6 +85,14 @@ fn rearm() {
     }
 }
 
+/// 诊断:最近一次被 mtimer 打断的 PC(观测字直读,~10ms 新鲜度)。
+/// 2026-09-21 冻结实验:WDT 关闭复现卡顿,核心死在 wait_halted 的
+/// hcint MMIO 读上(总线停摆,load 永不返回,中断不可达)——WDT 是
+/// 唯一恢复手段;[FPS] 行带此值以便事后定位死亡现场。
+pub fn last_sampled_pc() -> usize {
+    unsafe { core::ptr::read_volatile(LAST_PC_PA as *const u32) as usize }
+}
+
 /// mtimer ISR：喂狗 → 心跳 +1 → 采样被中断 PC → 重装下一拍（绝对值，防迟到补拍风暴）。
 /// 喂狗放最前：wedge 时心跳即喂狗，停跳后 WDT ≈0.34s 复位整片。
 pub fn heartbeat_tick() {
