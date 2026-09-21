@@ -114,7 +114,7 @@ impl Ep0 {
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
-        Ep0 { dev: 0, mps: ep0_mps }.write_no_data(std_setup(StdRequest::SetAddress(addr)))
+        Ep0::new(0, ep0_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
