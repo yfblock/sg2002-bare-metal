@@ -46,16 +46,16 @@ pub fn handle_usb_irq() {
     }
     // HAINT：每 bit 对应一个通道的中断状态。
     let haint = dwc2.haint.get();
-    for ch in 0..2u32 {
-        if haint & (1 << ch) == 0 {
+    for ch in [Channel::CONTROL, Channel::VIDEO] {
+        if haint & (1 << ch.0) == 0 {
             continue;
         }
-        let chan = usb::dwc2_channel(ch);
+        let chan = ch.chan_regs();
         let hcint = chan.hcint.extract();
         // 清掉本通道所有中断位（W1C）
         chan.hcint.set(hcint.get());
         if hcint.is_set(HCINT::CHHLTD) {
-            CH_DONE[ch as usize].store(true, Ordering::Release);
+            CH_DONE[ch.0 as usize].store(true, Ordering::Release);
         }
     }
 }
@@ -88,10 +88,11 @@ impl Channel {
     /// Isoch 视频传输通道（与控制分离）。
     pub const VIDEO: Channel = Channel(1);
 
-    /// 通道寄存器视图。
+    /// 通道寄存器视图。索引由本类型构造保证合法(仅 `CONTROL`/`VIDEO`
+    /// 两个常量,字段私有)。
     #[inline]
     pub(crate) fn chan_regs(&self) -> &'static Dwc2HostChannel {
-        usb::dwc2_channel(self.0)
+        &usb::dwc2_regs().hc[self.0 as usize]
     }
 
     /// 等通道空闲（`CHENA` 自清）。
