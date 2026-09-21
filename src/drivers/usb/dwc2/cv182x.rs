@@ -9,7 +9,7 @@
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
 use crate::drivers::usb;
-use super::ch::spin_delay;
+use super::channel::spin_delay;
 use super::regs::{
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GNPTXFSIZ, GRXFSIZ, GSNPSID, GUSBCFG,
     HPTXFSIZ, Cv182xUsb2Phy,

@@ -8,7 +8,7 @@
 //! - [`regs`]：`tock-registers` 寄存器/位域/主机通道/PHY 结构。
 //! - [`controller`]：上电、软复位、Force Host、FIFO flush、`HPRT0` 根口操作（通用序列）。
 //! - [`cv182x`]：CV182x/SG2002 SoC 专属参数（动态 FIFO/UTMI 宽度/GAHB/PHY override）。
-//! - [`ch`]：主机通道原语（启停/等待/NAK-XACT 重试）+ USB ISR + HFNUM 时间。
+//! - [`channel`]：主机通道原语（启停/等待/NAK-XACT 重试）+ USB ISR + HFNUM 时间。
 //! - [`dma`]：内部 DMA 窗（EP0 小缓冲 + UVC 等时大区）。
 //! - [`control`]：EP0 控制传输（标准请求 + Hub 端口请求包装）。
 //! - [`isoch`]：等时 IN 端点（`IsochInEp`，下一微帧调度，高带宽 mult 支持）。
@@ -16,13 +16,13 @@
 pub mod regs;
 pub mod controller;
 pub mod cv182x;
-pub mod ch;
+pub mod channel;
 pub mod control;
 pub mod dma;
 pub mod isoch;
 
 pub use controller::{dwc2_host_init, hprt0_port, port_reset_pulse};
-pub use ch::{handle_usb_irq, take_usb_isr_count};
+pub use channel::{handle_usb_irq, take_usb_isr_count};
 pub use control::Ep0;
 pub use dma::{dma_rx_slice, dma_write_at, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 pub use isoch::{wmax_mps, wmax_mult, wmax_payload_per_uframe, IsochInEp};

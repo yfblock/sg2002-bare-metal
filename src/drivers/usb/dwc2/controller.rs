@@ -15,7 +15,7 @@ use crate::arch::time::delay;
 use crate::drivers::usb;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x420a;
-use super::ch::{poll_until, spin_delay};
+use super::channel::{poll_until, spin_delay};
 use super::regs::{
     GSNPSID, GINTMSK, GINTSTS, GOTGCTL, GRSTCTL,
     GUSBCFG, HCFG, HPRT0,

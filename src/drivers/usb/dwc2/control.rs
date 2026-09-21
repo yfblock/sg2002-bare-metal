@@ -1,7 +1,7 @@
 //! EP0 控制传输：`Ep0` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
-use super::ch::Channel;
+use super::channel::Channel;
 use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
 use tock_registers::fields::FieldValue;
