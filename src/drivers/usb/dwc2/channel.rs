@@ -2,11 +2,10 @@
 //!
 //! 通道约定：**0 = EP0 控制**，**1 = Isoch 视频**。
 
-use core::sync::atomic::{AtomicBool, Ordering};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::LocalRegisterCopy;
 
-use super::regs::{Dwc2HostChannel, GINTSTS, HCCHAR, HCINT, HCTSIZ, HFNUM};
+use super::regs::{Dwc2HostChannel, HCCHAR, HCINT, HCTSIZ, HFNUM};
 use crate::drivers::usb;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use tock_registers::fields::FieldValue;
@@ -21,44 +20,6 @@ pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 /// 通过 [`Channel::CONTROL`] / [`Channel::VIDEO`] 选定。
 #[derive(Clone, Copy)]
 pub struct Channel(u32);
-
-/// 每个通道的「传输完成」flag，由 USB ISR (`handle_usb_irq`) 置位，
-/// [`Channel::wait_halted`] 每轮检查一次。下标 = 通道号（0=EP0, 1=Isoch）。
-static CH_DONE: [AtomicBool; 2] = [const { AtomicBool::new(false) }; 2];
-
-/// USB ISR 被调用的次数（诊断用：判断中断是否真的到达小核）。
-static USB_ISR_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-
-/// 取走 USB ISR 计数（swap 清零）。
-pub fn take_usb_isr_count() -> u32 {
-    USB_ISR_COUNT.swap(0, Ordering::Relaxed)
-}
-
-/// USB 中断处理：由 trap handler 调用。
-///
-/// DWC2 中断链路：通道完成 → `HCINT.CHHLTD` → `HAINT` → `GINTSTS.HCHINT`
-/// → PLIC source 30 → M-mode trap。本函数清 `HCINT` 并设 `CH_DONE` 唤醒等待者。
-pub fn handle_usb_irq() {
-    USB_ISR_COUNT.fetch_add(1, Ordering::Relaxed);
-    let dwc2 = usb::dwc2_regs();
-    if !dwc2.gintsts.is_set(GINTSTS::HCHINT) {
-        return;
-    }
-    // HAINT：每 bit 对应一个通道的中断状态。
-    let haint = dwc2.haint.get();
-    for ch in [Channel::CONTROL, Channel::VIDEO] {
-        if haint & (1 << ch.0) == 0 {
-            continue;
-        }
-        let chan = ch.chan_regs();
-        let hcint = chan.hcint.extract();
-        // 清掉本通道所有中断位（W1C）
-        chan.hcint.set(hcint.get());
-        if hcint.is_set(HCINT::CHHLTD) {
-            CH_DONE[ch.0 as usize].store(true, Ordering::Release);
-        }
-    }
-}
 
 /// 有界条件轮询:cond 命中返回 true,轮次耗尽返回 false(错误由调用方定)。
 /// 替代散落各处的 `for _ in 0..N { if cond {..} spin }` 手写循环。
@@ -101,24 +62,21 @@ impl Channel {
         }
     }
 
-    /// 等通道 halt。中断 flag 优先，`spin_delay` 轮询兜底。
+    /// 等通道 halt:纯轮询 `CHHLTD`。
     ///
-    /// 两条路径都留着是因为 PLIC source 30 在 C906L 上触发率很低——
-    /// 实测每 100 帧约 69 次 ISR，而同期有 7700 次通道传输，覆盖率不到 1%。
-    /// 中断链路本身是正确的（`HCINTMSK` 已编程、无误触发），只是不足以替代轮询。
+    /// USB ISR 路径已移除(PLIC 源 30 停用):其对 HCINT 的并发 RMW 是
+    /// 2026-09-21 判定的总线停摆触发面,且实测覆盖率 <1%。轮询间隔
+    /// 64 拍(~256ns)——对 HCINT 的 MMIO 读退避,远低于 125µs 微帧粒度。
     pub(crate) fn wait_halted(&self) -> UsbResult<HcintSnapshot> {
         let chan = self.chan_regs();
-        let idx = self.0 as usize;
         for _ in 0..8_000_000u32 {
-            // 中断 flag（USB ISR 置 CH_DONE）优先，轮询 CHHLTD 兜底；
             // HCINT 的 W1C 只在返回路径写回一次。
-            let done = CH_DONE[idx].swap(false, Ordering::AcqRel);
             let hi = chan.hcint.extract();
-            if done || hi.is_set(HCINT::CHHLTD) {
+            if hi.is_set(HCINT::CHHLTD) {
                 chan.hcint.set(hi.get());
                 return Ok(hi);
             }
-            spin_delay(8);
+            spin_delay(64);
         }
         Err(UsbError::Timeout)
     }

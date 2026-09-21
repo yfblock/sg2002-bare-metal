@@ -16,7 +16,7 @@ use crate::drivers::usb;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x420a;
 use super::channel::{poll_until, spin_delay};
-use super::regs::{GINTMSK, GINTSTS, GOTGCTL, GRSTCTL, GSNPSID, GUSBCFG, HCFG, HPRT0};
+use super::regs::{GINTSTS, GOTGCTL, GRSTCTL, GSNPSID, GUSBCFG, HCFG, HPRT0};
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
 fn dbg_dwc2_init_timeout(phase: &'static str) {
@@ -194,8 +194,6 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     flush_tx_fifo_host_all()?;
     flush_rx_fifo_host()?;
 
-    dwc2.haintmsk.set((1 << 0) | (1 << 1));
-    dwc2.gintmsk.modify(GINTMSK::HCHINT::SET);
 
     dwc2.gintsts.set(0xFFFF_FFFF);
 

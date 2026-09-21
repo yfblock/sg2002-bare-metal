@@ -21,7 +21,6 @@ pub mod dma;
 pub mod isoch;
 pub mod regs;
 
-pub use channel::{handle_usb_irq, take_usb_isr_count};
 pub use control::Ep0;
 pub use controller::{dwc2_host_init, hprt0_port, port_reset_pulse};
 pub use dma::{dma_rx_slice, dma_write_at, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};

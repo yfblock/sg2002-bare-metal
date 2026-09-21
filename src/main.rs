@@ -153,11 +153,10 @@ fn report_fps(frames: u32, fps_mark_frame: &mut u32, fps_mark_time: &mut u64) {
         0
     };
     logger::print_fmt(format_args!(
-        "[FPS] frames={} fps={}.{:02} usbisr={} jpu_err={} pc={:#010x}\n",
+        "[FPS] frames={} fps={}.{:02} jpu_err={} pc={:#010x}\n",
         frames,
         fps_x100 / 100,
         fps_x100 % 100,
-        crate::drivers::usb::dwc2::take_usb_isr_count(),
         crate::drivers::jpu::take_reset_count(),
         crate::arch::time::last_sampled_pc(),
     ));

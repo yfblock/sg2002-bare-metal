@@ -33,9 +33,11 @@ pub unsafe fn init() {
     plic.set_priority(mbox, 1);
     plic.enable(mbox, CTX);
 
-    let usb = NonZeroU32::new(USB_IRQ_SRC).unwrap();
-    plic.set_priority(usb, 1);
-    plic.enable(usb, CTX);
+    // USB(源 30)不再使能:2026-09-21 冻结实验判定 DWC2 总线停摆是 WDT 卡顿
+    // 根因,而 ISR 与主循环对 HCINT 的并发 RMW 是唯一已识别的触发面;
+    // 该 ISR 实测覆盖率 <1%(绿跑 usbisr=0),纯轮询已覆盖全部 halt 检测。
+    // 常量 USB_IRQ_SRC 保留供文档引用与将来恢复。
+    let _ = USB_IRQ_SRC;
 }
 
 /// Claim(读 claim 寄存器获取中断 source ID;0 = 无 pending)。

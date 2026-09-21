@@ -50,9 +50,7 @@ extern "C" fn rust_trap_handler(mcause: Mcause, cur_sp: usize) -> usize {
             let src = plic::claim();
             match src {
                 plic::MBOX_IRQ_SRC => crate::ipc::handle_mailbox_irq(),
-                plic::USB_IRQ_SRC => {
-                    crate::drivers::usb::dwc2::handle_usb_irq();
-                }
+                // USB 源 30 已停用(plic::init 不再使能)——见 plic.rs 注释
                 _ => {}
             }
             plic::complete(src);
