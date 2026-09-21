@@ -144,16 +144,20 @@ impl ControlEp {
         ))
     }
 
-    /// 在默认地址 0 上发送 `SET_ADDRESS`（须在 [`ControlEp::new`] 建立句柄之前）。
+    /// 在**默认地址句柄**上发送 `SET_ADDRESS`,并把本句柄迁移到新地址。
     ///
-    /// 存在理由不止命名:ControlEp 字段私有,`dev:0` 的临时构造只在本模块合法——
-    /// 本方法是「在默认地址上说话」的唯一许可通道(封装出口)。
+    /// 前置条件:`self` 处于默认地址(`dev==0`)——枚举序列中 probe 之后、
+    /// 正式使用之前;成功后 `self` 即新地址句柄,调用方无需重建。
     ///
     /// # 参数
     /// - `addr`：设备新地址，合法 **1..=127**。
-    /// - `control_ep_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
-    pub fn set_address(addr: u8, control_ep_mps: u32) -> UsbResult<()> {
-        ControlEp::new(0, control_ep_mps).write_no_data(StdRequest::set_address(addr))
+    pub fn set_address(&mut self, addr: u8) -> UsbResult<()> {
+        if self.dev != 0 {
+            return Err(UsbError::Protocol("set_address on non-default address"));
+        }
+        self.write_no_data(StdRequest::set_address(addr))?;
+        self.dev = addr as u32;
+        Ok(())
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
