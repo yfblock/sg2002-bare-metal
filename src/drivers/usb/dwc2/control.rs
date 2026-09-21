@@ -171,29 +171,28 @@ impl Ep0 {
         if out.is_empty() || out.len() > 4096 {
             return Err(UsbError::Protocol("bad ep0 read len"));
         }
-        let total = out.len() as u32;
         self.setup_stage(&setup_pkt)?;
+        let hc = self.hcchar(true); // IN 数据段:管道方向恒定,循环外组装
         unsafe {
-            let mut left = total;
-            let mut out_off: usize = 0;
+            // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
             let mut data1 = true;
-            while left > 0 {
-                let chunk = left.min(self.mps);
-                let hc = self.hcchar(true);
+            for out_chunk in out.chunks_mut(self.mps as usize) {
                 let pid = if data1 {
                     HCTSIZ::PID::Data1
                 } else {
                     HCTSIZ::PID::Data0
                 };
-                Channel::CONTROL.xfer(hc, pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(chunk), DMA_OFF_SMALL_IO as u32)?;
-                cache::dcache_invalidate_after_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
+                Channel::CONTROL.xfer(
+                    hc,
+                    pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(out_chunk.len() as u32),
+                    DMA_OFF_SMALL_IO as u32,
+                )?;
+                cache::dcache_invalidate_after_dma(dma_ptr().add(DMA_OFF_SMALL_IO), out_chunk.len());
                 core::ptr::copy_nonoverlapping(
                     dma_ptr().add(DMA_OFF_SMALL_IO),
-                    out.as_mut_ptr().add(out_off),
-                    chunk as usize,
+                    out_chunk.as_mut_ptr(),
+                    out_chunk.len(),
                 );
-                out_off += chunk as usize;
-                left -= chunk;
                 data1 = !data1;
             }
 
@@ -211,27 +210,27 @@ impl Ep0 {
             return Err(UsbError::Protocol("bad ep0 write data len"));
         }
         self.setup_stage(&setup_pkt)?;
+        let hc = self.hcchar(false); // OUT 数据段:管道方向恒定,循环外组装
         unsafe {
-            let mut left = data.len() as u32;
-            let mut src: usize = 0;
+            // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
             let mut data1 = true;
-            while left > 0 {
-                let chunk = left.min(self.mps);
+            for chunk in data.chunks(self.mps as usize) {
                 core::ptr::copy_nonoverlapping(
-                    data.as_ptr().add(src),
+                    chunk.as_ptr(),
                     dma_ptr().add(DMA_OFF_SMALL_IO),
-                    chunk as usize,
+                    chunk.len(),
                 );
-                cache::dcache_clean_for_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk as usize);
-                let hc = self.hcchar(false);
+                cache::dcache_clean_for_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk.len());
                 let pid = if data1 {
                     HCTSIZ::PID::Data1
                 } else {
                     HCTSIZ::PID::Data0
                 };
-                Channel::CONTROL.xfer(hc, pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(chunk), DMA_OFF_SMALL_IO as u32)?;
-                src += chunk as usize;
-                left -= chunk;
+                Channel::CONTROL.xfer(
+                    hc,
+                    pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(chunk.len() as u32),
+                    DMA_OFF_SMALL_IO as u32,
+                )?;
                 data1 = !data1;
             }
 
