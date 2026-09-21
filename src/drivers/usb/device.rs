@@ -73,10 +73,7 @@ pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResul
 /// 读配置描述符首接口的 `bInterfaceClass`。
 fn first_interface_class(ep: &ControlEp) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
-    ep.read(
-        StdRequest::get_descriptor_configuration(0, 64).raw(),
-        &mut buf,
-    )?;
+    ep.read(StdRequest::get_descriptor_configuration(0, 64), &mut buf)?;
     let mut i: usize = 0;
     while i + 2 <= buf.len() {
         let bl = buf[i] as usize;

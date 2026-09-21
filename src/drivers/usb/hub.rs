@@ -235,7 +235,7 @@ impl DeviceHub {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
     pub fn new(control_ep: ControlEp) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
-        control_ep.read(HubRequest::get_hub_descriptor(64).raw(), &mut buf)?;
+        control_ep.read(HubRequest::get_hub_descriptor(64), &mut buf)?;
         if buf[0] < 7 || buf[1] != USB_DT_HUB {
             return Err(UsbError::Protocol("invalid hub descriptor"));
         }
@@ -255,21 +255,24 @@ impl Hub for DeviceHub {
     fn port_power(&self, port: u8) -> UsbResult<()> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
-        self.control_ep
-            .write_no_data(HubRequest::set_port_feature(port as u16, HUB_PORT_FEATURE_POWER).raw())
+        self.control_ep.write_no_data(HubRequest::set_port_feature(
+            port as u16,
+            HUB_PORT_FEATURE_POWER,
+        ))
     }
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
         self.control_ep
-            .read(HubRequest::get_port_status(port as u16).raw(), &mut buf)?;
+            .read(HubRequest::get_port_status(port as u16), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
-        self.control_ep.write_no_data(
-            HubRequest::set_port_feature(port as u16, HUB_PORT_FEATURE_RESET).raw(),
-        )?;
+        self.control_ep.write_no_data(HubRequest::set_port_feature(
+            port as u16,
+            HUB_PORT_FEATURE_RESET,
+        ))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
         crate::arch::time::delay(Duration::from_millis(100));
@@ -277,15 +280,19 @@ impl Hub for DeviceHub {
     }
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
-        self.control_ep.write_no_data(
-            HubRequest::clear_port_feature(port as u16, HUB_PORT_FEATURE_C_CONNECTION).raw(),
-        )
+        self.control_ep
+            .write_no_data(HubRequest::clear_port_feature(
+                port as u16,
+                HUB_PORT_FEATURE_C_CONNECTION,
+            ))
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
-        self.control_ep.write_no_data(
-            HubRequest::clear_port_feature(port as u16, HUB_PORT_FEATURE_C_RESET).raw(),
-        )
+        self.control_ep
+            .write_no_data(HubRequest::clear_port_feature(
+                port as u16,
+                HUB_PORT_FEATURE_C_RESET,
+            ))
     }
 
     fn pwr_good(&self) -> Duration {
@@ -322,47 +329,40 @@ impl PortSpeed {
 
 // ---- Hub 类 SETUP 构造（归本模块;与标准/UVC 构造同为纯函数）----
 
-/// Hub 类请求(8 字节 SETUP 包的语义包装;发送点经 [`Self::raw`]
-/// 取线格式)。
-pub(crate) struct HubRequest([u8; 8]);
+/// Hub 类请求构造器(命名空间;每函数直接产出 8 字节 SETUP 包)。
+pub(crate) struct HubRequest;
 
 impl HubRequest {
-    /// 线格式:8 字节 SETUP 包。
-    #[inline]
-    pub(crate) fn raw(self) -> [u8; 8] {
-        self.0
-    }
-
     /// `SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
     #[inline]
-    pub(crate) fn set_port_feature(port: u16, feature: u16) -> Self {
+    pub(crate) fn set_port_feature(port: u16, feature: u16) -> [u8; 8] {
         let [fl, fh] = feature.to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
-        Self([0x23, 0x03, fl, fh, pl, ph, 0, 0])
+        [0x23, 0x03, fl, fh, pl, ph, 0, 0]
     }
 
     /// `CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
     #[inline]
-    pub(crate) fn clear_port_feature(port: u16, feature: u16) -> Self {
+    pub(crate) fn clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
         let [fl, fh] = feature.to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
-        Self([0x23, 0x01, fl, fh, pl, ph, 0, 0])
+        [0x23, 0x01, fl, fh, pl, ph, 0, 0]
     }
 
     /// `GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）;
     /// 参数 = 下游端口号。
     #[inline]
-    pub(crate) fn get_port_status(port: u16) -> Self {
+    pub(crate) fn get_port_status(port: u16) -> [u8; 8] {
         let [pl, ph] = port.to_le_bytes();
-        Self([0xA3, 0x00, 0, 0, pl, ph, 4, 0])
+        [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
     }
 
     /// `GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符;
     /// 参数 = `wLength`。
     #[inline]
-    pub(crate) fn get_hub_descriptor(w_length: u16) -> Self {
+    pub(crate) fn get_hub_descriptor(w_length: u16) -> [u8; 8] {
         let [ll, lh] = w_length.to_le_bytes();
-        Self([0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh])
+        [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
     }
 }
 
