@@ -8,7 +8,7 @@ use super::regs::{HCCHAR, HCTSIZ};
 use tock_registers::fields::FieldValue;
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::setup;
+use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 /// EP0 控制端点句柄：把控制传输的公共前置参数（设备地址、EP0 最大包长）
 /// 绑定为端点自身状态。
@@ -82,7 +82,7 @@ impl Ep0 {
         let ep0 = Ep0 { dev: 0, mps: 64 };
         unsafe {
             let wlen: u16 = 18;
-            ep0.setup_stage(&setup::get_descriptor_device())?;
+            ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
 
             Channel::CONTROL.xfer(
                 ep0.hcchar(true),
@@ -112,7 +112,7 @@ impl Ep0 {
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
-        Ep0 { dev: 0, mps: ep0_mps }.write_no_data(setup::set_address(addr))
+        Ep0 { dev: 0, mps: ep0_mps }.write_no_data(std_setup(StdRequest::SetAddress { addr }))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
@@ -120,7 +120,7 @@ impl Ep0 {
     /// # 参数
     /// - `cfg`：`bConfigurationValue`（通常非 0 表示激活配置）。
     pub fn set_configuration(&self, cfg: u8) -> UsbResult<()> {
-        self.write_no_data(setup::set_configuration(cfg))
+        self.write_no_data(std_setup(StdRequest::SetConfiguration { cfg }))
     }
 
     /// 对 **已寻址** Hub 发送 `SET_PORT_FEATURE`（无数据阶段）。

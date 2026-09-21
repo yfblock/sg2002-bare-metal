@@ -2,10 +2,10 @@
 
 use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
-use crate::drivers::usb::setup;
+use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 use super::descriptor::{reselect_isoch_alt_for_payload, UvcStreamSelection};
-use super::setup::{uvc_get_cur_vs, uvc_get_max_vs, uvc_set_cur_vs};
+use super::setup::{uvc_setup, UvcRequest};
 
 const VS_PROBE_CONTROL: u8 = 0x01;
 const VS_COMMIT_CONTROL: u8 = 0x02;
@@ -53,20 +53,28 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 /// 协商后会更新 `sel.negotiated_payload_size`，并依据
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
 pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> UsbResult<()> {
-    let _ = ep.write_no_data(setup::set_interface(0, sel.vs_interface));
+    let _ = ep.write_no_data(std_setup(StdRequest::SetInterface { alt: 0, interface: sel.vs_interface }));
 
     let probe_init = build_probe_commit_payload(sel);
     dump_probe("PROBE.SET", &probe_init);
 
     ep.write(
-        uvc_set_cur_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
+        uvc_setup(UvcRequest::SetCurVs {
+            interface: sel.vs_interface,
+            selector: VS_PROBE_CONTROL,
+            w_length: UVC_PROBE_COMMIT_LEN as u16,
+        }),
         &probe_init,
     )?;
 
     let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
     if ep
         .read(
-            uvc_get_max_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
+            uvc_setup(UvcRequest::GetMaxVs {
+                interface: sel.vs_interface,
+                selector: VS_PROBE_CONTROL,
+                w_length: UVC_PROBE_COMMIT_LEN as u16,
+            }),
             &mut probe_max,
         )
         .is_ok()
@@ -76,7 +84,11 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
 
     let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
     ep.read(
-        uvc_get_cur_vs(sel.vs_interface, VS_PROBE_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
+        uvc_setup(UvcRequest::GetCurVs {
+            interface: sel.vs_interface,
+            selector: VS_PROBE_CONTROL,
+            w_length: UVC_PROBE_COMMIT_LEN as u16,
+        }),
         &mut probe,
     )?;
     dump_probe("PROBE.CUR", &probe);
@@ -99,11 +111,15 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     }
 
     ep.write(
-        uvc_set_cur_vs(sel.vs_interface, VS_COMMIT_CONTROL, UVC_PROBE_COMMIT_LEN as u16),
+        uvc_setup(UvcRequest::SetCurVs {
+            interface: sel.vs_interface,
+            selector: VS_COMMIT_CONTROL,
+            w_length: UVC_PROBE_COMMIT_LEN as u16,
+        }),
         &probe,
     )?;
 
-    ep.write_no_data(setup::set_interface(sel.alt_setting, sel.vs_interface))?;
+    ep.write_no_data(std_setup(StdRequest::SetInterface { alt: sel.alt_setting, interface: sel.vs_interface }))?;
 
     log::info!("UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
         sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, negotiated_frame_size);

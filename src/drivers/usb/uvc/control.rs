@@ -6,7 +6,7 @@ use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
 
 use super::descriptor::UvcControlEntities;
-use super::setup::{uvc_get_cur_vc, uvc_get_def_vc, uvc_set_cur_vc};
+use super::setup::{uvc_setup, UvcRequest};
 
 // ProcessingUnit selectors (wValue MSB)
 const PU_BACKLIGHT_COMPENSATION: u8 = 0x01;
@@ -35,7 +35,7 @@ fn try_set_cur_u8(
     selector: u8,
     value: u8,
 ) -> bool {
-    let setup = uvc_set_cur_vc(vc_if, entity, selector, 1);
+    let setup = uvc_setup(UvcRequest::SetCurVc { interface: vc_if, entity_id: entity, selector, w_length: 1 });
     let buf = [value];
     ep.write(setup, &buf).is_ok()
 }
@@ -46,7 +46,7 @@ fn try_get_cur_u16(
     entity: u8,
     selector: u8,
 ) -> Option<u16> {
-    let setup = uvc_get_cur_vc(vc_if, entity, selector, 2);
+    let setup = uvc_setup(UvcRequest::GetCurVc { interface: vc_if, entity_id: entity, selector, w_length: 2 });
     let mut buf = [0u8; 2];
     if ep.read(setup, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
@@ -61,7 +61,7 @@ fn try_get_def_u16(
     entity: u8,
     selector: u8,
 ) -> Option<u16> {
-    let setup = uvc_get_def_vc(vc_if, entity, selector, 2);
+    let setup = uvc_setup(UvcRequest::GetDefVc { interface: vc_if, entity_id: entity, selector, w_length: 2 });
     let mut buf = [0u8; 2];
     if ep.read(setup, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
@@ -77,7 +77,7 @@ fn try_set_cur_u16(
     selector: u8,
     value: u16,
 ) -> bool {
-    let setup = uvc_set_cur_vc(vc_if, entity, selector, 2);
+    let setup = uvc_setup(UvcRequest::SetCurVc { interface: vc_if, entity_id: entity, selector, w_length: 2 });
     let buf = value.to_le_bytes();
     ep.write(setup, &buf).is_ok()
 }

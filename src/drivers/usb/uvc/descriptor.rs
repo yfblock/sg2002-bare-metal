@@ -5,7 +5,7 @@
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::device;
-use crate::drivers::usb::setup;
+use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
@@ -113,7 +113,10 @@ fn choose_frame_interval(
 /// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
 pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult<[u8; 4096]> {
     let mut hdr = [0u8; 9];
-    ep.read(setup::get_descriptor_configuration(cfg_index, 9), &mut hdr)?;
+    ep.read(
+        std_setup(StdRequest::GetDescriptorConfiguration { cfg_index, w_length: 9 }),
+        &mut hdr,
+    )?;
     if hdr[1] != device::USB_DT_CONFIGURATION {
         return Err(UsbError::Protocol("not a configuration descriptor"));
     }
@@ -123,7 +126,10 @@ pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult
     }
     let mut buf = [0u8; 4096];
     ep.read(
-        setup::get_descriptor_configuration(cfg_index, total as u16),
+        std_setup(StdRequest::GetDescriptorConfiguration {
+            cfg_index,
+            w_length: total as u16,
+        }),
         &mut buf[..total],
     )?;
     Ok(buf)
