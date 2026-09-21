@@ -20,7 +20,6 @@ const DWC2_CORE_REV_2_91A: u32 = 0x291a;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x420a;
 use super::ch::{poll_until, spin_delay};
-use tock_registers::registers::ReadWrite;
 use super::regs::{
     GSNPSID,
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
@@ -87,12 +86,6 @@ fn force_host_mode() -> UsbResult<()> {
     Err(UsbError::Hardware("CURMODE_HOST not set after FORCEHOSTMODE"))
 }
 
-/// 取根端口寄存器视图（HPRT0）。
-#[inline]
-pub fn hprt0() -> &'static ReadWrite<u32, HPRT0::Register> {
-    &usb::dwc2_regs().hprt0
-}
-
 /// 设/清 HPRT0 的 `PWR` 与 `RST`（本驱动仅需写这两个普通字段）。
 ///
 /// 写前做两件事，均不可省：
@@ -116,8 +109,9 @@ fn port_reset_pulse() {
     // USB 2.0 spec TDRSTR (root hub reset) min = 50ms（实测 cv182x 的 PHY chirp K/J
     // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
     // 这里给到 ≥60ms 留余量，并保留 PWR；CONNDET 若是 pending 先写 1 清掉。
-    if hprt0().is_set(HPRT0::CONNDET) {
-        hprt0().modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
+    let dwc2 = usb::dwc2_regs();
+    if dwc2.hprt0.is_set(HPRT0::CONNDET) {
+        dwc2.hprt0.modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
     }
     hprt0_port(true, true); // 保留 PWR,拉 PRTRST
     delay(Duration::from_millis(60)); // PRTRST 60ms

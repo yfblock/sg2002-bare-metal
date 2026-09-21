@@ -132,7 +132,7 @@ impl Hub for RootHub {
     }
 
     fn port_status_w0(&self, _port: u8) -> UsbResult<u16> {
-        let p = dwc2::hprt0();
+        let p = &super::dwc2_regs().hprt0;
         let mut w0 = 0u16;
         if p.is_set(HPRT0::CONNSTS) {
             w0 |= W0_CONNECTION;

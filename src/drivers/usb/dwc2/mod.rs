@@ -19,7 +19,7 @@ pub mod control;
 pub mod dma;
 pub mod isoch;
 
-pub use controller::{dwc2_host_init, dwc2_host_root_bus_reset_pulse, hprt0};
+pub use controller::{dwc2_host_init, dwc2_host_root_bus_reset_pulse};
 pub use ch::{handle_usb_irq, take_usb_isr_count, usb_post_set_address_delay};
 pub use control::Ep0;
 pub use dma::{dma_rx_slice, dma_write_at, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
