@@ -4,7 +4,7 @@ use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup::{std_setup, StdRequest};
 
-use super::descriptor::{reselect_isoch_alt_for_payload, UvcStreamSelection};
+use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
 use super::setup::{uvc_setup, UvcRequest};
 
 const VS_PROBE_CONTROL: u8 = 0x01;
@@ -22,7 +22,7 @@ fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT
     buf[1] = 0x00;
     buf[2] = sel.format_index;
     buf[3] = sel.frame_index;
-    buf[4..8].copy_from_slice(&sel.frame_interval.to_le_bytes());
+    buf[4..8].copy_from_slice(&to_uvc_ticks(sel.frame_interval).to_le_bytes());
     let w = u32::from(sel.frame_w.max(640));
     let h = u32::from(sel.frame_h.max(480));
     let est = if sel.is_mjpeg { w.saturating_mul(h) } else { w.saturating_mul(h).saturating_mul(2) };

@@ -66,7 +66,8 @@ pub(crate) extern "C" fn rust_main() -> ! {
     let prefs = uvc::UvcPrefs {
         frame_w: 640,
         frame_h: 480,
-        frame_interval: 333_333, // ≈30fps:给廉价 webcam 更多曝光/ISP 余量
+        // 33.3333ms ≈ 30fps:给廉价 webcam 更多曝光/ISP 余量。
+        frame_interval: core::time::Duration::from_nanos(33_333_300),
     };
     let camera = uvc::open(&cam, &prefs).expect("open camera");
 

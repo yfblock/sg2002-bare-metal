@@ -1,6 +1,10 @@
 //! UVC 配置描述符读取与解析：VS 流（格式/帧/等时端点候选，含选流打分与
 //! interval 选择）与 VC 实体（CameraTerminal / ProcessingUnit）。
 //! `read_configuration_descriptor` 经 EP0 读回整份配置描述符，其余为纯解析。
+//! UVC `dwFrameInterval` 线上为 100ns tick 的 u32;域内统一 [`Duration`],
+//! 仅在边界换算。
+
+use core::time::Duration;
 
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
@@ -25,6 +29,18 @@ const VC_PROCESSING_UNIT: u8 = 0x05;
 /// `wTerminalType = 0x0201` 表示 ITT_CAMERA（CameraTerminal）。
 const ITT_CAMERA: u16 = 0x0201;
 
+/// UVC `dwFrameInterval`(100ns tick) → 域内 [`Duration`]。
+#[inline]
+fn from_uvc_ticks(t: u32) -> Duration {
+    Duration::from_nanos(u64::from(t) * 100)
+}
+
+/// [`Duration`] → UVC `dwFrameInterval` u32(写 PROBE/COMMIT 负载用)。
+#[inline]
+pub(crate) fn to_uvc_ticks(d: Duration) -> u32 {
+    (d.as_nanos() / 100) as u32
+}
+
 const ENDPOINT_ATTR_ISOCH: u8 = 1;
 
 // 视频流参数
@@ -39,7 +55,7 @@ pub struct UvcStreamSelection {
     pub mps_raw: u16,
     pub format_index: u8,
     pub frame_index: u8,
-    pub frame_interval: u32,
+    pub frame_interval: Duration,
     /// 选定格式是否为 MJPEG（用于上层判断输出是否为 JPEG）。
     pub is_mjpeg: bool,
     pub frame_w: u16,
@@ -56,7 +72,8 @@ pub struct UvcStreamSelection {
 
 /// 根据偏好 interval 从某 frame 描述符的可用 interval 集合中选最接近的值。
 ///
-/// 返回 0 表示未设偏好（调用方沿用 `min_ival`）。`i` 为该 VS_FRAME 描述符在 `cfg` 中的起始
+/// 返回 0 表示未设偏好（调用方沿用 `min_ival`）；入参/候选/返回均为 100ns
+/// tick(`dwFrameInterval` 原始值)。`i` 为该 VS_FRAME 描述符在 `cfg` 中的起始
 /// 偏移，`bl` 为其 `bLength`；`ival_type`>0 为离散列表（其后跟 `ival_type` 个 u32），
 /// `ival_type==0` 为连续区间（`dwMinFrameInterval`@26 / `dwMaxFrameInterval`@30）。
 fn choose_frame_interval(
@@ -144,13 +161,13 @@ pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult
 /// - `frame_w`/`frame_h`：精确匹配该尺寸的 frame 得最高分；其余按"≤ 偏好面积
 ///   越接近越好、超出倒扣"打分。典型：JPU DMA pool 把可硬件解码的分辨率限制在
 ///   ~640×480，超出 `jpu_alloc` 失败
-/// - `frame_interval`(100ns 单位,UVC `dwFrameInterval`):非 0 时从各 frame
-///   的可用 interval 中选**最接近**值而非默认最小间隔(最高 fps)。
-///   典型 `333_333` ≈ 30 fps——给廉价 webcam 更多曝光/ISP 余量
+/// - `frame_interval`:非 [`Duration::ZERO`] 时从各 frame 的可用 interval 中
+///   选**最接近**值而非默认最小间隔(最高 fps)。典型 30fps ≈ 33.33ms——
+///   给廉价 webcam 更多曝光/ISP 余量
 pub struct UvcPrefs {
     pub frame_w: u16,
     pub frame_h: u16,
-    pub frame_interval: u32,
+    pub frame_interval: Duration,
 }
 
 pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) -> UsbResult<UvcStreamSelection> {
@@ -253,7 +270,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
                 }
                 // 选定本 frame 描述符实际使用的 interval：
                 // 设了 PREFERRED_FRAME_INTERVAL 时选最接近它的可用值；否则沿用最小（最高 fps）。
-                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, ival_type, prefs.frame_interval);
+                let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, ival_type, to_uvc_ticks(prefs.frame_interval));
                 let dflt_ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
                 let pick = (cur_fmt_ix_for_frame, frame_ix, w, h, dflt_ival);
                 let is_mjpeg = st == VS_FRAME_MJPEG;
@@ -357,7 +374,7 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
         mps_raw,
         format_index: fmt_ix,
         frame_index: frame_ix,
-        frame_interval: interval,
+        frame_interval: from_uvc_ticks(interval),
         is_mjpeg,
         frame_w,
         frame_h,
