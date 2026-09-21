@@ -77,36 +77,13 @@ pub(crate) extern "C" fn rust_main() -> ! {
     pipeline_loop(&camera)
 }
 
-/// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
-struct PipelineStats {
-    frames: u32,
-    cap: Duration,
-    dec: Duration,
-    ive: Duration,
-    byte_acc: u64,
-    fps_mark_frame: u32,
-    fps_mark_time: u64,
-}
-
-impl PipelineStats {
-    fn new() -> Self {
-        Self {
-            frames: 0,
-            cap: Duration::ZERO,
-            dec: Duration::ZERO,
-            ive: Duration::ZERO,
-            byte_acc: 0,
-            fps_mark_frame: 0,
-            fps_mark_time: crate::arch::time::rdtime(),
-        }
-    }
-}
-
 /// 主循环:capture → JPU decode → IVE CSC → mailbox notify。
 ///
 /// `ep0`/`sel` 由 rust_main 的初始化阶段产生。
 fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
-    let mut st = PipelineStats::new();
+    let mut frames: u32 = 0;
+    let mut fps_mark_frame = 0u32;
+    let mut fps_mark_time = crate::arch::time::rdtime();
 
     loop {
         if ipc::paused() {
@@ -114,19 +91,16 @@ fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
             continue;
         }
 
-        let t_cap0 = crate::arch::time::rdtime();
         match camera.capture_frame() {
             Ok(n) => {
-                st.frames = st.frames.wrapping_add(1);
-                st.cap += crate::arch::time::elapsed_since(t_cap0);
-                st.byte_acc += n as u64;
+                frames = frames.wrapping_add(1);
 
                 // decode + notify
-                decode_and_notify(n, &mut st);
+                decode_and_notify(n, frames);
 
                 // FPS 报告
-                if st.frames.wrapping_sub(st.fps_mark_frame) >= FPS_REPORT_EVERY {
-                    report_fps(&mut st);
+                if frames.wrapping_sub(fps_mark_frame) >= FPS_REPORT_EVERY {
+                    report_fps(frames, &mut fps_mark_frame, &mut fps_mark_time);
                 }
             }
             Err(_) => {
@@ -145,68 +119,47 @@ fn notify_mjpeg_only(frame_count: u32, jpeg_len: usize) {
 /// JPU 解码 → IVE CSC → 邮箱 notify(单帧处理)。
 ///
 /// 取不到 DMA 帧数据与解码失败共用同一条兜底路径(只通知 MJPEG)。
-fn decode_and_notify(jpeg_len: usize, st: &mut PipelineStats) {
+fn decode_and_notify(jpeg_len: usize, frames: u32) {
     let jpeg = match dwc2::dma_rx_slice(uvc::UVC_ASSEMBLED_JPEG_DMA_OFF, jpeg_len) {
         Some(s) => s,
-        None => return notify_mjpeg_only(st.frames, jpeg_len),
+        None => return notify_mjpeg_only(frames, jpeg_len),
     };
 
-    let t_dec0 = crate::arch::time::rdtime();
     let decoded = crate::drivers::jpu::decode_to_shared(jpeg);
-    st.dec += crate::arch::time::elapsed_since(t_dec0);
-
     let (w, h, len) = match decoded {
         Ok(r) => r,
-        Err(_) => return notify_mjpeg_only(st.frames, jpeg_len),
+        Err(_) => return notify_mjpeg_only(frames, jpeg_len),
     };
 
     // IVE 硬件 CSC
     let yuv = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
     let rgb = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
-    let t_ive0 = crate::arch::time::rdtime();
     if let Err(_e) = crate::drivers::ive::csc(&yuv, &rgb, w, h) {}
-    st.ive += crate::arch::time::elapsed_since(t_ive0);
 
     let reported = len.min(platform::YUV_BUF_SIZE);
     let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
         | ipc::FLAG_YUV_READY
         | ipc::encode_dims(w, h);
-    ipc::notify(st.frames, reported as u32, flags);
+    ipc::notify(frames, reported as u32, flags);
 }
 
-/// 每 N 帧打印一次 FPS 统计。
-fn report_fps(st: &mut PipelineStats) {
+/// 每 N 帧打印一次帧数/FPS(usbisr/jpu_err 计数器在此 drain)。
+fn report_fps(frames: u32, fps_mark_frame: &mut u32, fps_mark_time: &mut u64) {
     let now = crate::arch::time::rdtime();
-    let dt = now.wrapping_sub(st.fps_mark_time);
-    let frames = st.frames.wrapping_sub(st.fps_mark_frame) as u64;
+    let dt = now.wrapping_sub(*fps_mark_time);
+    let n = frames.wrapping_sub(*fps_mark_frame) as u64;
     let fps_x100 = if dt > 0 {
-        frames * crate::arch::time::TIMEBASE_HZ * 100 / dt
+        n * crate::arch::time::TIMEBASE_HZ * 100 / dt
     } else { 0 };
-
-    let kbps = if dt > 0 { st.byte_acc * crate::arch::time::TIMEBASE_HZ / dt / 1024 } else { 0 };
-    // Duration → 每帧均值(µs);被统计的 Duration 在各实参处显式可见
-    let per_frame = |d: core::time::Duration| (d / (frames.max(1) as u32)).as_micros() as u64;
     logger::print_fmt(format_args!(
-        "[FPS] frames={} fps={}.{:02} bytes/frame={} KB/s={} \
-         us{{cap={} dec={} ive={} hb={}}} usbisr={} jpu_err={}\n",
-        st.frames,
+        "[FPS] frames={} fps={}.{:02} usbisr={} jpu_err={}\n",
+        frames,
         fps_x100 / 100,
         fps_x100 % 100,
-        st.byte_acc / frames.max(1),
-        kbps,
-        per_frame(st.cap),
-        per_frame(st.dec),
-        per_frame(st.ive),
-        // 心跳观测字(MMIO 直读):main 视角验证 mtimer 是否真的在走
-        unsafe { core::ptr::read_volatile(0x0190_041C as *const u32) },
         crate::drivers::usb::dwc2::take_usb_isr_count(),
         crate::drivers::jpu::take_reset_count(),
     ));
 
-    st.cap = Duration::ZERO;
-    st.dec = Duration::ZERO;
-    st.ive = Duration::ZERO;
-    st.byte_acc = 0;
-    st.fps_mark_frame = st.frames;
-    st.fps_mark_time = now;
+    *fps_mark_frame = frames;
+    *fps_mark_time = now;
 }
