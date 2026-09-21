@@ -28,7 +28,7 @@
 //!     └── ive/      IVE 硬件 CSC(未跑通,保留)
 //! ```
 
-#![feature(sync_unsafe_cell)] // core::cell::SyncUnsafeCell(nightly 钉死于 rust-toolchain.toml)
+#![feature(sync_unsafe_cell)]
 #![no_std]
 #![recursion_limit = "512"]
 #![no_main]
@@ -71,13 +71,6 @@ pub(crate) extern "C" fn rust_main() -> ! {
     let camera = uvc::take_camera().expect("open camera");
 
     // 进入主循环(永不返回)
-    pipeline_loop(&camera)
-}
-
-/// 主循环:capture → JPU decode → IVE CSC → mailbox notify。
-///
-/// `control_ep`/`sel` 由 rust_main 的初始化阶段产生。
-fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
     let mut frames: u32 = 0;
     let mut fps_mark_frame = 0u32;
     let mut fps_mark_time = crate::arch::time::rdtime();
@@ -100,7 +93,8 @@ fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
                     report_fps(frames, &mut fps_mark_frame, &mut fps_mark_time);
                 }
             }
-            Err(_) => {}
+            // 相机停发/总线错误的唯一现场日志(Timeout 一次 ≈10s,不会刷屏)
+            Err(e) => log::warn!("[PIPE] capture error: {:?}", e),
         }
     }
 }
