@@ -5,7 +5,7 @@
 use crate::drivers::usb::error::UsbResult;
 
 use super::session::UvcCamera;
-use super::setup::{uvc_setup, UvcRequest};
+use super::setup::UvcRequest;
 
 // ProcessingUnit selectors (wValue MSB)
 const PU_BACKLIGHT_COMPENSATION: u8 = 0x01;
@@ -36,23 +36,25 @@ struct PuCtrl {
 impl UvcCamera {
     /// 控制传输出现**任何**错误（含 STALL）都返回 false，调用方按“不支持”降级/忽略。
     fn try_set_cur_u8(&self, entity: u8, selector: u8, value: u8) -> bool {
-        let setup = uvc_setup(UvcRequest::SetCurControl {
+        let setup = UvcRequest::SetCurControl {
             interface: self.entities.vc_interface,
             entity_id: entity,
             selector,
             w_length: 1,
-        });
+        }
+        .build();
         let buf = [value];
         self.ep0.write(setup, &buf).is_ok()
     }
 
     fn try_get_cur_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = uvc_setup(UvcRequest::GetCurControl {
+        let setup = UvcRequest::GetCurControl {
             interface: self.entities.vc_interface,
             entity_id: entity,
             selector,
             w_length: 2,
-        });
+        }
+        .build();
         let mut buf = [0u8; 2];
         if self.ep0.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
@@ -62,12 +64,13 @@ impl UvcCamera {
     }
 
     fn try_get_def_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = uvc_setup(UvcRequest::GetDefControl {
+        let setup = UvcRequest::GetDefControl {
             interface: self.entities.vc_interface,
             entity_id: entity,
             selector,
             w_length: 2,
-        });
+        }
+        .build();
         let mut buf = [0u8; 2];
         if self.ep0.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
@@ -77,12 +80,13 @@ impl UvcCamera {
     }
 
     fn try_set_cur_u16(&self, entity: u8, selector: u8, value: u16) -> bool {
-        let setup = uvc_setup(UvcRequest::SetCurControl {
+        let setup = UvcRequest::SetCurControl {
             interface: self.entities.vc_interface,
             entity_id: entity,
             selector,
             w_length: 2,
-        });
+        }
+        .build();
         let buf = value.to_le_bytes();
         self.ep0.write(setup, &buf).is_ok()
     }

@@ -5,7 +5,7 @@ use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
 use super::session::UvcCamera;
-use super::setup::{uvc_setup, UvcRequest};
+use super::setup::UvcRequest;
 
 const VS_PROBE_CONTROL: u8 = 0x01;
 const VS_COMMIT_CONTROL: u8 = 0x02;
@@ -70,22 +70,24 @@ impl UvcCamera {
         dump_probe("PROBE.SET", &probe_init);
 
         ep.write(
-            uvc_setup(UvcRequest::SetCurStreaming {
+            UvcRequest::SetCurStreaming {
                 interface: sel.vs_interface,
                 selector: VS_PROBE_CONTROL,
                 w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }),
+            }
+            .build(),
             &probe_init,
         )?;
 
         let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
         if ep
             .read(
-                uvc_setup(UvcRequest::GetMaxStreaming {
+                UvcRequest::GetMaxStreaming {
                     interface: sel.vs_interface,
                     selector: VS_PROBE_CONTROL,
                     w_length: UVC_PROBE_COMMIT_LEN as u16,
-                }),
+                }
+                .build(),
                 &mut probe_max,
             )
             .is_ok()
@@ -95,11 +97,12 @@ impl UvcCamera {
 
         let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
         ep.read(
-            uvc_setup(UvcRequest::GetCurStreaming {
+            UvcRequest::GetCurStreaming {
                 interface: sel.vs_interface,
                 selector: VS_PROBE_CONTROL,
                 w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }),
+            }
+            .build(),
             &mut probe,
         )?;
         dump_probe("PROBE.CUR", &probe);
@@ -127,11 +130,12 @@ impl UvcCamera {
         }
 
         ep.write(
-            uvc_setup(UvcRequest::SetCurStreaming {
+            UvcRequest::SetCurStreaming {
                 interface: sel.vs_interface,
                 selector: VS_COMMIT_CONTROL,
                 w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }),
+            }
+            .build(),
             &probe,
         )?;
 
