@@ -17,6 +17,39 @@ pub struct Ep0 {
     mps: u32,
 }
 
+/// 设备描述符(USB 2.0 §9.6.1,固定 18 字节)的字段视图:偏移与字段名
+/// 同址、小端显式、构造即校验长度。避免裸指针 reinterpret 的 packed
+/// 引用 UB 与目标字节序假设。
+struct DeviceDescriptor<'a> {
+    sl: &'a [u8],
+}
+
+impl<'a> DeviceDescriptor<'a> {
+    fn new(sl: &'a [u8]) -> Option<Self> {
+        (sl.len() >= 18).then_some(Self { sl })
+    }
+
+    /// `bDeviceClass`@4。
+    fn device_class(&self) -> u8 {
+        self.sl[4]
+    }
+
+    /// `bMaxPacketSize0`@7。
+    fn max_packet_size0(&self) -> u8 {
+        self.sl[7]
+    }
+
+    /// `idVendor`@8..10(LE)。
+    fn vendor_id(&self) -> u16 {
+        u16::from_le_bytes([self.sl[8], self.sl[9]])
+    }
+
+    /// `idProduct`@10..12(LE)。
+    fn product_id(&self) -> u16 {
+        u16::from_le_bytes([self.sl[10], self.sl[11]])
+    }
+}
+
 impl Ep0 {
     /// 绑定一台已寻址设备的 EP0。
     ///
@@ -92,17 +125,13 @@ impl Ep0 {
 
             let sl = dma_rx_slice(OFF_EP0, wlen as usize)
                 .ok_or(UsbError::Hardware("dma view"))?;
-            if sl.len() < 12 {
-                return Err(UsbError::Protocol("short descriptor"));
-            }
-            let vid = u16::from_le_bytes([sl[8], sl[9]]);
-            let pid = u16::from_le_bytes([sl[10], sl[11]]);
-            let ep0_mps = normalize_ep0_mps(sl[7]);
-            let b_device_class = sl[4];
+            let dd = DeviceDescriptor::new(sl)
+                .ok_or(UsbError::Protocol("short descriptor"))?;
+            let ep0_mps = normalize_ep0_mps(dd.max_packet_size0());
 
             ep0.status_stage(false)?;
 
-            Ok((vid, pid, ep0_mps, b_device_class))
+            Ok((dd.vendor_id(), dd.product_id(), ep0_mps, dd.device_class()))
         }
     }
 
