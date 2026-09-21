@@ -17,32 +17,16 @@ use super::DRIVERS;
 /// 本模块日志 target(单一权威点)。
 const LOG_TARGET: &str = "sg200x_bsp::usb::hub";
 
+/// Hub 端口特性：`PORT_RESET`。
+const HUB_PORT_FEATURE_RESET: u16 = 4;
+/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
+const HUB_PORT_FEATURE_POWER: u16 = 8;
+/// Hub 端口特性：`C_PORT_CONNECTION`（连接变化位，CLEAR 用）。
+const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
+/// Hub 端口特性：`C_PORT_RESET`。
+const HUB_PORT_FEATURE_C_RESET: u16 = 20;
 /// Hub 类描述符类型（`GET_DESCRIPTOR(Hub)` 的 wValue 高字节）。
 const USB_DT_HUB: u8 = 0x29;
-
-/// Hub 端口特性选择子(USB 2.0 Table 11-17;每次请求取一个,非位掩码)。
-#[derive(Clone, Copy)]
-pub(crate) enum PortFeature {
-    /// `PORT_RESET`(=4):端口复位。
-    Reset,
-    /// `PORT_POWER`(=5):端口供电(hub 端口默认 PowerOff,必须显式打开)。
-    Power,
-    /// `C_PORT_CONNECTION`(=16):连接变化位,CLEAR 用。
-    ConnectionChange,
-    /// `C_PORT_RESET`(=20):复位变化位。
-    ResetChange,
-}
-
-impl PortFeature {
-    fn code(self) -> u16 {
-        match self {
-            PortFeature::Reset => 4,
-            PortFeature::Power => 5,
-            PortFeature::ConnectionChange => 16,
-            PortFeature::ResetChange => 20,
-        }
-    }
-}
 
 /// `wPortStatus[0]`：当前连接。
 pub const W0_CONNECTION: u16 = 1 << 0;
@@ -234,7 +218,7 @@ impl Hub for DeviceHub {
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
         self.control_ep.write_no_data(HubRequest::set_port_feature(
             port as u16,
-            PortFeature::Power,
+            HUB_PORT_FEATURE_POWER,
         ))
     }
 
@@ -248,7 +232,7 @@ impl Hub for DeviceHub {
     fn reset_port(&self, port: u8) -> UsbResult<()> {
         self.control_ep.write_no_data(HubRequest::set_port_feature(
             port as u16,
-            PortFeature::Reset,
+            HUB_PORT_FEATURE_RESET,
         ))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
@@ -260,7 +244,7 @@ impl Hub for DeviceHub {
         self.control_ep
             .write_no_data(HubRequest::clear_port_feature(
                 port as u16,
-                PortFeature::ConnectionChange,
+                HUB_PORT_FEATURE_C_CONNECTION,
             ))
     }
 
@@ -268,7 +252,7 @@ impl Hub for DeviceHub {
         self.control_ep
             .write_no_data(HubRequest::clear_port_feature(
                 port as u16,
-                PortFeature::ResetChange,
+                HUB_PORT_FEATURE_C_RESET,
             ))
     }
 
@@ -312,16 +296,16 @@ pub(crate) struct HubRequest;
 impl HubRequest {
     /// `SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
     #[inline]
-    pub(crate) fn set_port_feature(port: u16, feature: PortFeature) -> [u8; 8] {
-        let [fl, fh] = feature.code().to_le_bytes();
+    pub(crate) fn set_port_feature(port: u16, feature: u16) -> [u8; 8] {
+        let [fl, fh] = feature.to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
         [0x23, 0x03, fl, fh, pl, ph, 0, 0]
     }
 
     /// `CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
     #[inline]
-    pub(crate) fn clear_port_feature(port: u16, feature: PortFeature) -> [u8; 8] {
-        let [fl, fh] = feature.code().to_le_bytes();
+    pub(crate) fn clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
+        let [fl, fh] = feature.to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
         [0x23, 0x01, fl, fh, pl, ph, 0, 0]
     }
