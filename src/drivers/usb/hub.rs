@@ -4,7 +4,7 @@
 //!
 //! 状态统一为 USB 2.0 §11.24.2 `wPortStatus` word0 布局（根口现场转换，
 //! Linux `dwc2_hcd_hub_control` 同款做法）。总线枚举（[`RootHub::enumerate_bus`] /
-//! [`Hub::walk_subtree`]/[`dispatch_device`]）也在本模块——Linux hub.c 模型:
+//! [`Hub::walk_subtree`]/[`UsbDevice::dispatch`]）也在本模块——Linux hub.c 模型:
 //! hub 驱动拥有树遍历与设备分派。
 
 use core::time::Duration;
@@ -125,7 +125,7 @@ pub trait Hub {
     }
 
     /// **树遍历**(Linux hub.c 模型):供电 → 等稳定 → 逐口取子设备
-    /// ([`Self::enumerate_child`])并递归 [`dispatch_device`];返回子树被
+    /// ([`Self::enumerate_child`])并递归 [`UsbDevice::dispatch`];返回子树被
     /// 接管的设备(多台先到先得)。单口 NotPresent 只跳过不中断;子树
     /// 无人接管 = `Err(NotPresent)`。
     fn walk_subtree(&self, next_addr: &mut u8) -> UsbResult<UsbDevice> {
@@ -146,7 +146,7 @@ pub trait Hub {
                 Err(UsbError::NotPresent) => continue, // 空口/端口级失败:跳过
                 Err(e) => return Err(e),               // 硬失败:中断整树
             };
-            match dispatch_device(child, next_addr) {
+            match child.dispatch(next_addr) {
                 Ok(d) => {
                     if claimed.is_none() {
                         claimed = Some(d); // 多台候选先到先得
@@ -250,6 +250,35 @@ impl DeviceHub {
     }
 }
 
+impl UsbDevice {
+    /// 分派一台已枚举的设备(按值消费,决定自身去向):
+    ///
+    /// - **Hub** → [`Hub::walk_subtree`] 递归下探;
+    /// - **功能设备** → 类驱动注册表匹配,被接管则上抛;无人接管 =
+    ///   `Err(NotPresent)`(空枝软信号)。
+    pub(crate) fn dispatch(self, next_addr: &mut u8) -> UsbResult<UsbDevice> {
+        log::info!(target: LOG_TARGET, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
+        self.vid, self.pid, self.dev_class);
+
+        if self.is_hub() {
+            log::info!(target: LOG_TARGET, "[USB]   -> Hub addr={}", self.control_ep.dev() as u8);
+            return DeviceHub::new(self.control_ep)?.walk_subtree(next_addr);
+        }
+
+        // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
+        log::info!(target: LOG_TARGET, "[USB]   -> function addr={} first_ifc_class={:02x}",
+        self.control_ep.dev(), self.iface_class);
+        match DRIVERS.iter().find(|d| d.matches(&self)) {
+            Some(driver) => {
+                log::info!(target: LOG_TARGET, "[USB]   -> driver \"{}\" took addr={}",
+                driver.name(), self.control_ep.dev());
+                Ok(self)
+            }
+            None => Err(UsbError::NotPresent),
+        }
+    }
+}
+
 impl RootHub {
     /// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
     /// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
@@ -273,7 +302,7 @@ impl RootHub {
                 e => e,
             })?;
         log::info!("[USB] bus: scan finished.");
-        dispatch_device(child, &mut next_addr).map_err(|e| match e {
+        child.dispatch(&mut next_addr).map_err(|e| match e {
             UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
             e => e,
         })
@@ -400,30 +429,3 @@ impl HubRequest {
 }
 
 // ---- 总线遍历(topology 并入;Linux hub.c 模型:hub 驱动拥有枚举) ----
-
-/// 分派一台已枚举的设备:
-///
-/// - **Hub** → [`Hub::walk_subtree`] 递归下探;
-/// - **功能设备** → 类驱动注册表匹配,被接管则上抛;无人接管 =
-///   `Err(NotPresent)`(空枝软信号)。
-fn dispatch_device(dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
-    log::info!(target: LOG_TARGET, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
-        dev.vid, dev.pid, dev.dev_class);
-
-    if dev.is_hub() {
-        log::info!(target: LOG_TARGET, "[USB]   -> Hub addr={}", dev.control_ep.dev() as u8);
-        return DeviceHub::new(dev.control_ep)?.walk_subtree(next_addr);
-    }
-
-    // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
-    log::info!(target: LOG_TARGET, "[USB]   -> function addr={} first_ifc_class={:02x}",
-        dev.control_ep.dev(), dev.iface_class);
-    match DRIVERS.iter().find(|d| d.matches(&dev)) {
-        Some(driver) => {
-            log::info!(target: LOG_TARGET, "[USB]   -> driver \"{}\" took addr={}",
-                driver.name(), dev.control_ep.dev());
-            Ok(dev)
-        }
-        None => Err(UsbError::NotPresent),
-    }
-}
