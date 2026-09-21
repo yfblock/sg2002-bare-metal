@@ -22,12 +22,13 @@ pub struct UvcCamera {
     sel: UvcStreamSelection,
 }
 
-/// 打开摄像头会话：`open_camera` 的简写（偏好全默认时）。
+/// 打开摄像头会话（读配置描述符 → 解析 → 调校 → PROBE/COMMIT → 启动）。
 ///
 /// # 参数
-/// - `dev`：枚举得到的 UVC 设备。
+/// - `dev`：枚举得到的 UVC 设备——**按值移交**：会话消费设备(取其 EP0),
+///   调用方此后不再使用该句柄。
 /// - `prefs`：选流偏好（帧尺寸/帧率）。
-pub fn open(dev: &UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera> {
+pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera> {
     let ep0 = dev.ep0;
 
     // 配置描述符 → 有效切片(wTotalLength 截断)

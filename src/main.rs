@@ -71,7 +71,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
         // 33.3333ms ≈ 30fps:给廉价 webcam 更多曝光/ISP 余量。
         frame_interval: Duration::from_nanos(33_333_300),
     };
-    let camera = uvc::open(&cam, &prefs).expect("open camera");
+    let camera = uvc::open(cam, &prefs).expect("open camera");
 
     // 进入主循环(永不返回)
     pipeline_loop(&camera)
