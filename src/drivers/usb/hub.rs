@@ -18,6 +18,9 @@ use super::error::{UsbError, UsbResult};
 // ---- 总线遍历(topology 并入;Linux hub.c 模型:hub 驱动拥有枚举) ----
 
 /// Hub 端口特性：`PORT_RESET`。
+/// 本模块日志 target(11 处引用的单一权威点)。
+const LOG_TARGET: &str = "sg200x_bsp::usb::hub";
+
 const HUB_PORT_FEATURE_RESET: u16 = 4;
 /// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
 const HUB_PORT_FEATURE_POWER: u16 = 8;
@@ -92,31 +95,31 @@ pub trait Hub {
         let w0 = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
-                log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} GET_PORT_STATUS: {:?}", port, e);
+                log::info!(target: LOG_TARGET, "[USB] port {} GET_PORT_STATUS: {:?}", port, e);
                 return Err(UsbError::NotPresent);
             }
         };
         if w0 & W0_CONNECTION == 0 {
-            log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} empty (w0={:#06x})", port, w0);
+            log::info!(target: LOG_TARGET, "[USB] port {} empty (w0={:#06x})", port, w0);
             return Err(UsbError::NotPresent);
         }
         if let Err(e) = self.connect_reset_sequence(port) {
-            log::warn!(target: "sg200x_bsp::usb::hub", "[USB] port {} reset sequence: {:?}", port, e);
+            log::warn!(target: LOG_TARGET, "[USB] port {} reset sequence: {:?}", port, e);
             return Err(UsbError::NotPresent);
         }
         let after = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
-                log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} after-reset status: {:?}", port, e);
+                log::info!(target: LOG_TARGET, "[USB] port {} after-reset status: {:?}", port, e);
                 return Err(UsbError::NotPresent);
             }
         };
         if after & W0_ENABLE == 0 {
-            log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} reset done but not enabled (w0={:#06x})", port, after);
+            log::info!(target: LOG_TARGET, "[USB] port {} reset done but not enabled (w0={:#06x})", port, after);
             return Err(UsbError::NotPresent);
         }
         let speed = PortSpeed::from_status(after);
-        log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} enabled w0={:#06x} SPD={}",
+        log::info!(target: LOG_TARGET, "[USB] port {} enabled w0={:#06x} SPD={}",
             port, after, speed.as_str());
         Ok(enumerate_device(speed, next_addr)?)
     }
@@ -130,7 +133,7 @@ pub trait Hub {
         // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
         for port in 1..=nports {
             if let Err(e) = self.port_power(port) {
-                log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} POWER fail: {:?}", port, e);
+                log::info!(target: LOG_TARGET, "[USB] port {} POWER fail: {:?}", port, e);
             }
         }
         // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
@@ -248,34 +251,33 @@ impl DeviceHub {
 }
 
 impl RootHub {
-/// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
-/// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
-/// 上下文的硬错误)。
-pub fn enumerate_bus(&self) -> UsbResult<UsbDevice> {
-    log::info!(
-        "[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
-    );
+    /// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
+    /// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
+    /// 上下文的硬错误)。
+    pub fn enumerate_bus(&self) -> UsbResult<UsbDevice> {
+        log::info!(
+            "[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
+        );
 
-    self.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
-    if !self.wait_connect(1, Duration::from_secs(5)) {
-        return Err(UsbError::Hardware(
-            "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
-        ));
-    }
-    let mut next_addr: u8 = 1;
-    let child = self
+        self.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
+        if !self.wait_connect(1, Duration::from_secs(5)) {
+            return Err(UsbError::Hardware(
+                "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
+            ));
+        }
+        let mut next_addr: u8 = 1;
+        let child = self
             .enumerate_child(1, &mut next_addr)
-        .map_err(|e| match e {
-            UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+            .map_err(|e| match e {
+                UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+                e => e,
+            })?;
+        log::info!("[USB] bus: scan finished.");
+        dispatch_device(child, &mut next_addr).map_err(|e| match e {
+            UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
             e => e,
-        })?;
-    log::info!("[USB] bus: scan finished.");
-    dispatch_device(child, &mut next_addr).map_err(|e| match e {
-        UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
-        e => e,
-    })
-}
-
+        })
+    }
 }
 
 impl Hub for DeviceHub {
@@ -405,24 +407,23 @@ impl HubRequest {
 /// - **功能设备** → 类驱动注册表匹配,被接管则上抛;无人接管 =
 ///   `Err(NotPresent)`(空枝软信号)。
 fn dispatch_device(dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
-    log::info!(target: "sg200x_bsp::usb::hub", "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
+    log::info!(target: LOG_TARGET, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
         dev.vid, dev.pid, dev.dev_class);
 
     if dev.is_hub() {
-        log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> Hub addr={}", dev.control_ep.dev() as u8);
+        log::info!(target: LOG_TARGET, "[USB]   -> Hub addr={}", dev.control_ep.dev() as u8);
         return DeviceHub::new(dev.control_ep)?.walk_subtree(next_addr);
     }
 
     // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
-    log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> function addr={} first_ifc_class={:02x}",
+    log::info!(target: LOG_TARGET, "[USB]   -> function addr={} first_ifc_class={:02x}",
         dev.control_ep.dev(), dev.iface_class);
     match DRIVERS.iter().find(|d| d.matches(&dev)) {
         Some(driver) => {
-            log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> driver \"{}\" took addr={}",
+            log::info!(target: LOG_TARGET, "[USB]   -> driver \"{}\" took addr={}",
                 driver.name(), dev.control_ep.dev());
             Ok(dev)
         }
         None => Err(UsbError::NotPresent),
     }
 }
-
