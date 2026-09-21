@@ -73,31 +73,15 @@ impl UsbDevice {
 
 /// 类驱动：声明对已枚举功能设备的匹配条件。
 ///
-/// 注册表 [`DRIVERS`] 顺序即优先级;首个 `matches` 的驱动胜出,
-/// 接管设备沿遍历返回值上抛——驱动无状态、无副作用。
-/// (将来驱动需要接管动作/类初始化时再扩 `probe`,需求拉动。)
+/// 类驱动:匹配(扫树途中,轻) + probe(树扫完后,重——具体设备类型
+/// 由驱动自己持有,通用层不认识)。
 pub trait DeviceDriver: Sync {
     fn name(&self) -> &'static str;
     /// 匹配判定（接口类/设备类/VID:PID）。
     fn matches(&self, dev: &UsbDevice) -> bool;
+    /// 接管并初始化(重活);产物存进驱动自己的槽位,应用层向驱动取用。
+    fn probe(&self, dev: UsbDevice) -> UsbResult<()>;
 }
-
-/// UVC 摄像头驱动：Video(0x0e) 类功能设备。
-struct UvcCameraDriver;
-
-impl DeviceDriver for UvcCameraDriver {
-    fn name(&self) -> &'static str {
-        "uvc-camera"
-    }
-
-    fn matches(&self, dev: &UsbDevice) -> bool {
-        dev.iface_class == USB_CLASS_VIDEO
-    }
-}
-
-/// 已注册类驱动（顺序即优先级）。
-/// SAFETY: 注册表编译期定死、运行期只读;裸机单核无并发访问。
-pub(crate) static DRIVERS: &[&dyn DeviceDriver] = &[&UvcCameraDriver];
 
 // SAFETY 补充见上
 

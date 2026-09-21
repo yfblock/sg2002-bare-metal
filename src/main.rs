@@ -44,7 +44,6 @@ mod yuv_buf;
 use core::time::Duration;
 
 use crate::drivers::usb::hub::RootHub;
-use crate::drivers::usb::uvc::UvcCamera;
 use crate::drivers::usb::{dwc2, uvc};
 
 const FPS_REPORT_EVERY: u32 = 100;
@@ -59,23 +58,17 @@ pub(crate) extern "C" fn rust_main() -> ! {
     platform::platform_init();
     arch::trap::init_interrupts();
 
-    // UVC 初始化(同步,一次性):主机 bring-up → 树遍历枚举 → 打开会话
+    // UVC 初始化(同步,一次性):主机 bring-up → 树遍历(驱动各自 probe
+    // 并存好自己的设备)→ main 取用。
     dwc2::dwc2_host_init().expect("host init");
-    let cam = RootHub.enumerate_bus().expect("enum");
-    logger::print_fmt(format_args!(
-        "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
-        cam.vid,
-        cam.pid,
-        cam.control_ep.dev(),
-        cam.speed.as_str()
-    ));
-    let prefs = uvc::UvcPrefs {
+    uvc::set_prefs(uvc::UvcPrefs {
         frame_w: 640,
         frame_h: 480,
         // 33.3333ms ≈ 30fps:给廉价 webcam 更多曝光/ISP 余量。
         frame_interval: Duration::from_nanos(33_333_300),
-    };
-    let camera = UvcCamera::open(cam, &prefs).expect("open camera");
+    });
+    RootHub.enumerate_bus().expect("enum");
+    let camera = uvc::take_camera().expect("open camera");
 
     // 进入主循环(永不返回)
     pipeline_loop(&camera)

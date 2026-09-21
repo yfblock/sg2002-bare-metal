@@ -30,6 +30,12 @@ pub mod device;
 pub mod dwc2;
 pub mod uvc;
 
+use device::DeviceDriver;
+
+/// 已注册类驱动（顺序即优先级;组装点在本模块——驱动住在各自模块,
+/// device 与 uvc 互不依赖）。SAFETY: 编译期定死、运行期只读;单核。
+pub(crate) static DRIVERS: &[&dyn DeviceDriver] = &[&uvc::UvcCameraDriver];
+
 // DWC2 寄存器一律走 [`dwc2::regs`] 的 `tock-registers` 访问器。
 
 /// 取 DWC2 全局寄存器视图（基址为编译期常量，恒有效）。
