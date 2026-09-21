@@ -31,7 +31,7 @@ pub fn open(dev: &UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamer
     let ep0 = dev.ep0;
 
     // 配置描述符 → 有效切片(wTotalLength 截断)
-    let cfg_buf = descriptor::read_configuration_descriptor(&ep0, 1)?;
+    let cfg_buf = ep0.get_configuration_descriptor(1)?;
     let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
     let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
 

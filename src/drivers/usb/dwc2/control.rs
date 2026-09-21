@@ -122,6 +122,33 @@ impl Ep0 {
         self.write_no_data(std_setup(StdRequest::SetConfiguration { cfg }))
     }
 
+    /// `GET_DESCRIPTOR(Configuration)` 标准两段式:先读 9 字节头取
+    /// `wTotalLength`,再读全量(上限 4096)。纯标准请求组合,归本类型。
+    pub fn get_configuration_descriptor(&self, cfg_index: u8) -> UsbResult<[u8; 4096]> {
+        const USB_DT_CONFIGURATION: u8 = 2;
+        let mut hdr = [0u8; 9];
+        self.read(
+            std_setup(StdRequest::GetDescriptorConfiguration { cfg_index, w_length: 9 }),
+            &mut hdr,
+        )?;
+        if hdr[1] != USB_DT_CONFIGURATION {
+            return Err(UsbError::Protocol("not a configuration descriptor"));
+        }
+        let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
+        if total > 4096 {
+            return Err(UsbError::Protocol("configuration descriptor too large (>4096)"));
+        }
+        let mut buf = [0u8; 4096];
+        self.read(
+            std_setup(StdRequest::GetDescriptorConfiguration {
+                cfg_index,
+                w_length: total as u16,
+            }),
+            &mut buf[..total],
+        )?;
+        Ok(buf)
+    }
+
     /// 无数据阶段控制传输：`SETUP` + `STATUS` IN（零长度）。
     pub fn write_no_data(&self, setup_pkt: [u8; 8]) -> UsbResult<()> {
         self.setup_stage(&setup_pkt)?;

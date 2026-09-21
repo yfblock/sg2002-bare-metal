@@ -1,6 +1,7 @@
 //! UVC 配置描述符读取与解析：VS 流（格式/帧/等时端点候选，含选流打分与
 //! interval 选择）与 VC 实体（CameraTerminal / ProcessingUnit）。
-//! `read_configuration_descriptor` 经 EP0 读回整份配置描述符，其余为纯解析。
+//! 配置描述符经 [`Ep0::get_configuration_descriptor`](crate::drivers::usb::dwc2::Ep0)
+//! 读回,其余为纯解析。
 //! UVC `dwFrameInterval` 线上为 100ns tick 的 u32;域内统一 [`Duration`],
 //! 仅在边界换算。
 
@@ -9,7 +10,6 @@ use core::time::Duration;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::device;
-use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
@@ -125,31 +125,6 @@ fn choose_frame_interval(
         best = best_for(dflt_ival, best);
     }
     best.unwrap_or(0)
-}
-
-/// 通过 EP0 读取完整配置描述符（按首 9 字节里的 `wTotalLength`，最大 4096）。
-pub fn read_configuration_descriptor(ep: &dwc2::Ep0, cfg_index: u8) -> UsbResult<[u8; 4096]> {
-    let mut hdr = [0u8; 9];
-    ep.read(
-        std_setup(StdRequest::GetDescriptorConfiguration { cfg_index, w_length: 9 }),
-        &mut hdr,
-    )?;
-    if hdr[1] != device::USB_DT_CONFIGURATION {
-        return Err(UsbError::Protocol("not a configuration descriptor"));
-    }
-    let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
-    if total > 4096 {
-        return Err(UsbError::Protocol("configuration descriptor too large (>4096)"));
-    }
-    let mut buf = [0u8; 4096];
-    ep.read(
-        std_setup(StdRequest::GetDescriptorConfiguration {
-            cfg_index,
-            w_length: total as u16,
-        }),
-        &mut buf[..total],
-    )?;
-    Ok(buf)
 }
 
 /// 解析 VS 接口：优先选择 **MJPEG 格式**；若无 MJPEG 则使用未压缩 (YUY2/NV12) 格式。

@@ -41,6 +41,8 @@ mod ipc;
 mod platform;
 mod drivers;
 
+use core::time::Duration;
+
 use crate::drivers::usb::{dwc2, uvc};
 use crate::drivers::usb::hub::{enumerate_bus, RootHub};
 
@@ -67,7 +69,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
         frame_w: 640,
         frame_h: 480,
         // 33.3333ms ≈ 30fps:给廉价 webcam 更多曝光/ISP 余量。
-        frame_interval: core::time::Duration::from_nanos(33_333_300),
+        frame_interval: Duration::from_nanos(33_333_300),
     };
     let camera = uvc::open(&cam, &prefs).expect("open camera");
 
@@ -78,9 +80,9 @@ pub(crate) extern "C" fn rust_main() -> ! {
 /// 采集/处理 统计(单核,不需要原子)。各阶段耗时为 Duration 累计。
 struct PipelineStats {
     frames: u32,
-    cap: core::time::Duration,
-    dec: core::time::Duration,
-    ive: core::time::Duration,
+    cap: Duration,
+    dec: Duration,
+    ive: Duration,
     byte_acc: u64,
     fps_mark_frame: u32,
     fps_mark_time: u64,
@@ -90,9 +92,9 @@ impl PipelineStats {
     fn new() -> Self {
         Self {
             frames: 0,
-            cap: core::time::Duration::ZERO,
-            dec: core::time::Duration::ZERO,
-            ive: core::time::Duration::ZERO,
+            cap: Duration::ZERO,
+            dec: Duration::ZERO,
+            ive: Duration::ZERO,
             byte_acc: 0,
             fps_mark_frame: 0,
             fps_mark_time: crate::arch::time::rdtime(),
@@ -201,9 +203,9 @@ fn report_fps(st: &mut PipelineStats) {
         crate::drivers::jpu::take_reset_count(),
     ));
 
-    st.cap = core::time::Duration::ZERO;
-    st.dec = core::time::Duration::ZERO;
-    st.ive = core::time::Duration::ZERO;
+    st.cap = Duration::ZERO;
+    st.dec = Duration::ZERO;
+    st.ive = Duration::ZERO;
     st.byte_acc = 0;
     st.fps_mark_frame = st.frames;
     st.fps_mark_time = now;

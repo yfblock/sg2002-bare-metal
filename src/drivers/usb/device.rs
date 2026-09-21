@@ -21,8 +21,6 @@ pub const USB_CLASS_HUB: u8 = 0x09;
 pub const USB_CLASS_VIDEO: u8 = 0x0E;
 /// `bDescriptorType`：接口描述符（首接口类扫描用）。
 pub const USB_DT_INTERFACE: u8 = 4;
-/// `bDescriptorType`：配置描述符（GET_DESCRIPTOR 的 wValue 高字节）。
-pub const USB_DT_CONFIGURATION: u8 = 2;
 
 /// 一台已枚举设备：身份 + 控制端点句柄（枚举后身份不再散架为元组）。
 #[derive(Clone, Copy)]
