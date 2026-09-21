@@ -58,7 +58,10 @@ impl ControlEp {
     /// - `control_ep_mps`：EP0 最大包长（8/16/32/64）。
     #[inline]
     pub fn new(control_ep_mps: u32) -> Self {
-        Self { dev: 0, mps: control_ep_mps }
+        Self {
+            dev: 0,
+            mps: control_ep_mps,
+        }
     }
 
     /// 设备 USB 地址。

@@ -51,12 +51,12 @@ const FPS_REPORT_EVERY: u32 = 100;
 #[no_mangle]
 pub(crate) extern "C" fn rust_main() -> ! {
     // trap 入口 + 基础初始化
-    unsafe { arch::trap::init_mtvec() };
+    arch::trap::init_mtvec();
     logger::init();
     logger::print("=== C906L UVC+JPU start ===\n");
     ipc::write(0, 0, 0);
     platform::platform_init();
-    unsafe { arch::trap::init_interrupts() };
+    arch::trap::init_interrupts();
 
     // UVC 初始化(同步,一次性):主机 bring-up → 树遍历枚举 → 打开会话
     dwc2::dwc2_host_init().expect("host init");

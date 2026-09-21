@@ -19,23 +19,30 @@ extern "C" {
 
 /// 仅安装 trap 向量（Direct 模式）。在一切初始化**之前**调用，保证任何异常
 /// 都有入口可去（fault 打印依赖 UART 已被 U-Boot 配好，可用）。
-pub unsafe fn init_mtvec() {
-    mtvec::write(Mtvec::new(
-        _trap_entry as *const () as usize,
-        mtvec::TrapMode::Direct,
-    ));
+pub fn init_mtvec() {
+    // SAFETY: 安装本模块自有的 trap 向量;CSR 写入无内存安全前提。
+    unsafe {
+        mtvec::write(Mtvec::new(
+            _trap_entry as *const () as usize,
+            mtvec::TrapMode::Direct,
+        ));
+    }
 }
 
 /// 完整中断初始化：初始化 PLIC + 开启外部中断 + 启动 mtimer 心跳
 /// （trap 向量已由 `rust_main` 早期调用 [`init_mtvec`] 安装，此处不重复）。
 /// 在平台初始化完成后调用（过早开中断可能在业务未就绪时收到邮箱消息）。
-pub unsafe fn init_interrupts() {
-    plic::init();
-    // MIE.MEIE (bit 11) = 外部中断使能；mstatus.MIE (bit 3) = 全局中断使能
-    riscv::register::mie::set_mext();
-    riscv::register::mie::set_mtimer();
-    riscv::register::mstatus::set_mie();
-    super::time::init_heartbeat();
+pub fn init_interrupts() {
+    // SAFETY: CSR 使能与心跳启动均为模块内自有硬件状态;调用顺序契约
+    // (平台初始化后调用)由文档承载,非内存安全问题。
+    unsafe {
+        plic::init();
+        // MIE.MEIE (bit 11) = 外部中断使能；mstatus.MIE (bit 3) = 全局中断使能
+        riscv::register::mie::set_mext();
+        riscv::register::mie::set_mtimer();
+        riscv::register::mstatus::set_mie();
+        super::time::init_heartbeat();
+    }
 }
 
 /// Trap handler：处理 PLIC 外部中断 + 访问异常。
