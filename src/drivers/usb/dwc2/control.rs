@@ -50,7 +50,7 @@ impl Ep0 {
     fn setup_stage(&self, setup_packet: &[u8; 8]) -> UsbResult<()> {
         unsafe {
             core::ptr::copy_nonoverlapping(setup_packet.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-            cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
+            cache::dcache_clean_range(dma_ptr().add(OFF_EP0) as usize, 8);
             Channel::CONTROL.xfer(
                 self.hcchar(false),
                 HCTSIZ::PID::Setup + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(8),
@@ -88,7 +88,7 @@ impl Ep0 {
                 HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(wlen as u32),
                 OFF_EP0 as u32,
             )?;
-            cache::dcache_invalidate_after_dma(dma_ptr().add(OFF_EP0), wlen as usize);
+            cache::dcache_invalidate_range(dma_ptr().add(OFF_EP0) as usize, wlen as usize);
 
             let sl = core::slice::from_raw_parts(dma_ptr().add(OFF_EP0), wlen as usize);
             if sl.len() < 12 {
@@ -193,7 +193,7 @@ impl Ep0 {
                     DMA_OFF_SMALL_IO as u32,
                 )?;
                 let dma_src = dma_ptr().add(DMA_OFF_SMALL_IO);
-                cache::dcache_invalidate_after_dma(dma_src, out_chunk.len());
+                cache::dcache_invalidate_range(dma_src as usize, out_chunk.len());
                 core::ptr::copy_nonoverlapping(dma_src, out_chunk.as_mut_ptr(), out_chunk.len());
             }
             data1 = !data1;
@@ -226,7 +226,7 @@ impl Ep0 {
             unsafe {
                 let dma_dst = dma_ptr().add(DMA_OFF_SMALL_IO);
                 core::ptr::copy_nonoverlapping(chunk.as_ptr(), dma_dst, chunk.len());
-                cache::dcache_clean_for_dma(dma_dst, chunk.len());
+                cache::dcache_clean_range(dma_dst as usize, chunk.len());
                 Channel::CONTROL.xfer(
                     hc,
                     pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(chunk.len() as u32),

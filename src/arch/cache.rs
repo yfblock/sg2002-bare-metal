@@ -58,13 +58,3 @@ pub fn dcache_invalidate_range(start: usize, size: usize) {
     }
     riscv::asm::fence();
 }
-
-/// USB DWC2 通过 `HCDMA` 访问内存：缓冲区须在 **DMA 可见** 的相干视图上；
-/// 按缓冲区实际范围 clean（调用方多为 8-1024B 的 EP0 小缓冲，不值得全 cache flush）。
-pub unsafe fn dcache_clean_for_dma(ptr: *const u8, len: usize) {
-    dcache_clean_range(ptr as usize, len)
-}
-
-pub unsafe fn dcache_invalidate_after_dma(ptr: *mut u8, len: usize) {
-    dcache_invalidate_range(ptr as usize, len)
-}

@@ -129,7 +129,7 @@ impl IsochInEp {
             let remaining_bytes = channel.chan_regs().hctsiz.read(HCTSIZ::XFERSIZE);
             let received_bytes = transfer_size.saturating_sub(remaining_bytes) as usize;
             if received_bytes > 0 {
-                cache::dcache_invalidate_after_dma(dma_ptr().add(dma_off), received_bytes);
+                cache::dcache_invalidate_range(dma_ptr().add(dma_off) as usize, received_bytes);
             }
             Ok(received_bytes)
         }
