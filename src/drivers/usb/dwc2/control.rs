@@ -117,7 +117,7 @@ impl ControlEp {
         let control_ep = ControlEp { dev: 0, mps: 64 };
         // wLength = 18:设备描述符规范全长。
         let w_length: u16 = 18;
-        control_ep.setup_stage(&StdRequest::get_descriptor_device())?;
+        control_ep.setup_stage(&StdRequest::get_descriptor_device().raw())?;
 
         unsafe {
             Channel::CONTROL.xfer(
@@ -153,7 +153,7 @@ impl ControlEp {
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `control_ep_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, control_ep_mps: u32) -> UsbResult<()> {
-        ControlEp::new(0, control_ep_mps).write_no_data(StdRequest::set_address(addr))
+        ControlEp::new(0, control_ep_mps).write_no_data(StdRequest::set_address(addr).raw())
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
@@ -161,12 +161,12 @@ impl ControlEp {
     /// # 参数
     /// - `cfg`：`bConfigurationValue`（通常非 0 表示激活配置）。
     pub fn set_configuration(&self, cfg: u8) -> UsbResult<()> {
-        self.write_no_data(StdRequest::set_configuration(cfg))
+        self.write_no_data(StdRequest::set_configuration(cfg).raw())
     }
 
     /// 对已寻址设备发送 `SET_INTERFACE`(选接口备用设置,UVC 开流切带宽档)。
     pub fn set_interface(&self, alt: u8, interface: u8) -> UsbResult<()> {
-        self.write_no_data(StdRequest::set_interface(alt, interface))
+        self.write_no_data(StdRequest::set_interface(alt, interface).raw())
     }
 
     /// `GET_DESCRIPTOR(Configuration)` 标准两段式:先读 9 字节头取
@@ -175,7 +175,7 @@ impl ControlEp {
         const USB_DT_CONFIGURATION: u8 = 2;
         let mut hdr = [0u8; 9];
         self.read(
-            StdRequest::get_descriptor_configuration(cfg_index, 9),
+            StdRequest::get_descriptor_configuration(cfg_index, 9).raw(),
             &mut hdr,
         )?;
         if hdr[1] != USB_DT_CONFIGURATION {
@@ -189,7 +189,7 @@ impl ControlEp {
         }
         let mut buf = [0u8; 4096];
         self.read(
-            StdRequest::get_descriptor_configuration(cfg_index, total as u16),
+            StdRequest::get_descriptor_configuration(cfg_index, total as u16).raw(),
             &mut buf[..total],
         )?;
         Ok(buf)

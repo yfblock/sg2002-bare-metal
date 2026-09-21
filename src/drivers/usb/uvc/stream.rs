@@ -74,7 +74,8 @@ impl UvcCamera {
                 sel.vs_interface,
                 VS_PROBE_CONTROL,
                 UVC_PROBE_COMMIT_LEN as u16,
-            ),
+            )
+            .raw(),
             &probe_init,
         )?;
 
@@ -85,7 +86,8 @@ impl UvcCamera {
                     sel.vs_interface,
                     VS_PROBE_CONTROL,
                     UVC_PROBE_COMMIT_LEN as u16,
-                ),
+                )
+                .raw(),
                 &mut probe_max,
             )
             .is_ok()
@@ -99,7 +101,8 @@ impl UvcCamera {
                 sel.vs_interface,
                 VS_PROBE_CONTROL,
                 UVC_PROBE_COMMIT_LEN as u16,
-            ),
+            )
+            .raw(),
             &mut probe,
         )?;
         dump_probe("PROBE.CUR", &probe);
@@ -131,7 +134,8 @@ impl UvcCamera {
                 sel.vs_interface,
                 VS_COMMIT_CONTROL,
                 UVC_PROBE_COMMIT_LEN as u16,
-            ),
+            )
+            .raw(),
             &probe,
         )?;
 
