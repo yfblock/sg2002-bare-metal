@@ -234,7 +234,7 @@ impl<'a> DeviceHub<'a> {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
     pub fn new(ep0: &'a dwc2::Ep0) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
-        ep0.read(hub_setup(HubRequest::GetHubDescriptor { w_length: 64 }), &mut buf)?;
+        ep0.read(hub_setup(HubRequest::GetHubDescriptor(64)), &mut buf)?;
         if buf[0] < 7 || buf[1] != USB_DT_HUB {
             return Err(UsbError::Protocol("invalid hub descriptor"));
         }
@@ -262,7 +262,7 @@ impl Hub for DeviceHub<'_> {
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0.read(hub_setup(HubRequest::GetPortStatus { port: u16::from(port) }), &mut buf)?;
+        self.ep0.read(hub_setup(HubRequest::GetPortStatus(u16::from(port))), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
@@ -333,10 +333,12 @@ pub(crate) enum HubRequest {
     SetPortFeature { port: u16, feature: u16 },
     /// `CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
     ClearPortFeature { port: u16, feature: u16 },
-    /// `GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
-    GetPortStatus { port: u16 },
-    /// `GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符。
-    GetHubDescriptor { w_length: u16 },
+    /// `GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）;
+    /// 参数 = 下游端口号。
+    GetPortStatus(u16),
+    /// `GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符;
+    /// 参数 = `wLength`。
+    GetHubDescriptor(u16),
 }
 
 /// 按 [`HubRequest`] 构造 8 字节 SETUP 包。
@@ -353,11 +355,11 @@ pub(crate) fn hub_setup(req: HubRequest) -> [u8; 8] {
             let [pl, ph] = port.to_le_bytes();
             [0x23, 0x01, fl, fh, pl, ph, 0, 0]
         }
-        HubRequest::GetPortStatus { port } => {
+        HubRequest::GetPortStatus(port) => {
             let [pl, ph] = port.to_le_bytes();
             [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
         }
-        HubRequest::GetHubDescriptor { w_length } => {
+        HubRequest::GetHubDescriptor(w_length) => {
             let [ll, lh] = w_length.to_le_bytes();
             [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
         }

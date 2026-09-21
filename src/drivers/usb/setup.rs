@@ -8,10 +8,10 @@
 pub enum StdRequest {
     /// `GET_DESCRIPTOR(Device)`（`wLength` 固定 18 = 整份设备描述符）。
     GetDescriptorDevice,
-    /// `SET_ADDRESS`;`addr` 合法范围 **1..=127**（0 为默认地址）。
-    SetAddress { addr: u8 },
-    /// `SET_CONFIGURATION`;`cfg` = `bConfigurationValue`（非 0 激活）。
-    SetConfiguration { cfg: u8 },
+    /// `SET_ADDRESS`;参数为设备新地址,合法 **1..=127**（0 为默认地址）。
+    SetAddress(u8),
+    /// `SET_CONFIGURATION`;参数 = `bConfigurationValue`（非 0 激活）。
+    SetConfiguration(u8),
     /// `GET_DESCRIPTOR(Configuration)` — 对**已分配地址**的设备使用。
     /// 可先读 9 字节头再按 `wTotalLength` 读全。
     GetDescriptorConfiguration { cfg_index: u8, w_length: u16 },
@@ -30,14 +30,14 @@ pub fn std_setup(req: StdRequest) -> [u8; 8] {
             0x00, 0x00,
             18, 0, // wLength
         ],
-        StdRequest::SetAddress { addr } => [
+        StdRequest::SetAddress(addr) => [
             0x00,
             5, // SET_ADDRESS;wValue = addr
             addr, 0,
             0, 0,
             0, 0,
         ],
-        StdRequest::SetConfiguration { cfg } => [
+        StdRequest::SetConfiguration(cfg) => [
             0x00,
             9, // SET_CONFIGURATION;wValue = cfg
             cfg, 0,
