@@ -194,7 +194,6 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     flush_tx_fifo_host_all()?;
     flush_rx_fifo_host()?;
 
-
     dwc2.gintsts.set(0xFFFF_FFFF);
 
     super::cv182x::cv182x_usb2_phy_host_clear_utmi_override();

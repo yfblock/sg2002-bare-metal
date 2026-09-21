@@ -40,7 +40,11 @@ pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera
     let entities = descriptor::parse_uvc_control_entities(cfg, cfg_total).unwrap_or_default();
 
     // 早构造:后续步骤(调校/开流/warmup)全部是会话方法。
-    let mut camera = UvcCamera { control_ep, sel, entities };
+    let mut camera = UvcCamera {
+        control_ep,
+        sel,
+        entities,
+    };
     // 相机调校(自动白平衡/50Hz/AE;失败不阻塞——按出厂默认继续)
     let _ = camera.init_controls();
     camera.start_stream()?;

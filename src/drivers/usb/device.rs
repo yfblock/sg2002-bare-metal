@@ -7,7 +7,7 @@
 use super::dwc2::ControlEp;
 use super::error::{UsbError, UsbResult};
 use super::hub::PortSpeed;
-use super::setup::{std_setup, StdRequest};
+use super::setup::StdRequest;
 
 /// QEMU 默认 `usb-hub`（插在根口与外设之间）VID/PID。
 const QEMU_USB_HUB_VID: u16 = 0x0409;
@@ -73,13 +73,7 @@ pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResul
 /// 读配置描述符首接口的 `bInterfaceClass`。
 fn first_interface_class(ep: &ControlEp) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
-    ep.read(
-        std_setup(StdRequest::GetDescriptorConfiguration {
-            cfg_index: 0,
-            w_length: 64,
-        }),
-        &mut buf,
-    )?;
+    ep.read(StdRequest::get_descriptor_configuration(0, 64), &mut buf)?;
     let mut i: usize = 0;
     while i + 2 <= buf.len() {
         let bl = buf[i] as usize;

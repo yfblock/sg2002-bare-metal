@@ -36,25 +36,13 @@ struct PuCtrl {
 impl UvcCamera {
     /// 控制传输出现**任何**错误（含 STALL）都返回 false，调用方按“不支持”降级/忽略。
     fn try_set_cur_u8(&self, entity: u8, selector: u8, value: u8) -> bool {
-        let setup = UvcRequest::SetCurControl {
-            interface: self.entities.vc_interface,
-            entity_id: entity,
-            selector,
-            w_length: 1,
-        }
-        .build();
+        let setup = UvcRequest::set_cur_control(self.entities.vc_interface, entity, selector, 1);
         let buf = [value];
         self.control_ep.write(setup, &buf).is_ok()
     }
 
     fn try_get_cur_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = UvcRequest::GetCurControl {
-            interface: self.entities.vc_interface,
-            entity_id: entity,
-            selector,
-            w_length: 2,
-        }
-        .build();
+        let setup = UvcRequest::get_cur_control(self.entities.vc_interface, entity, selector, 2);
         let mut buf = [0u8; 2];
         if self.control_ep.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
@@ -64,13 +52,7 @@ impl UvcCamera {
     }
 
     fn try_get_def_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = UvcRequest::GetDefControl {
-            interface: self.entities.vc_interface,
-            entity_id: entity,
-            selector,
-            w_length: 2,
-        }
-        .build();
+        let setup = UvcRequest::get_def_control(self.entities.vc_interface, entity, selector, 2);
         let mut buf = [0u8; 2];
         if self.control_ep.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
@@ -80,13 +62,7 @@ impl UvcCamera {
     }
 
     fn try_set_cur_u16(&self, entity: u8, selector: u8, value: u16) -> bool {
-        let setup = UvcRequest::SetCurControl {
-            interface: self.entities.vc_interface,
-            entity_id: entity,
-            selector,
-            w_length: 2,
-        }
-        .build();
+        let setup = UvcRequest::set_cur_control(self.entities.vc_interface, entity, selector, 2);
         let buf = value.to_le_bytes();
         self.control_ep.write(setup, &buf).is_ok()
     }

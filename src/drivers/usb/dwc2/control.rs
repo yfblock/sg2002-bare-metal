@@ -6,7 +6,7 @@ use super::dma::{dma_ptr, dma_rx_slice, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::setup::{std_setup, StdRequest};
+use crate::drivers::usb::setup::StdRequest;
 use tock_registers::fields::FieldValue;
 
 /// EP0 控制端点句柄：把控制传输的公共前置参数（设备地址、EP0 最大包长）
@@ -58,7 +58,10 @@ impl ControlEp {
     /// - `control_ep_mps`：该设备 EP0 最大包长（8/16/32/64）。
     #[inline]
     pub fn new(dev: u32, control_ep_mps: u32) -> Self {
-        Self { dev, mps: control_ep_mps }
+        Self {
+            dev,
+            mps: control_ep_mps,
+        }
     }
 
     /// 设备 USB 地址。
@@ -114,7 +117,7 @@ impl ControlEp {
         let control_ep = ControlEp { dev: 0, mps: 64 };
         // wLength = 18:设备描述符规范全长。
         let w_length: u16 = 18;
-        control_ep.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
+        control_ep.setup_stage(&StdRequest::get_descriptor_device())?;
 
         unsafe {
             Channel::CONTROL.xfer(
@@ -150,7 +153,7 @@ impl ControlEp {
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `control_ep_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, control_ep_mps: u32) -> UsbResult<()> {
-        ControlEp::new(0, control_ep_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
+        ControlEp::new(0, control_ep_mps).write_no_data(StdRequest::set_address(addr))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
@@ -158,12 +161,12 @@ impl ControlEp {
     /// # 参数
     /// - `cfg`：`bConfigurationValue`（通常非 0 表示激活配置）。
     pub fn set_configuration(&self, cfg: u8) -> UsbResult<()> {
-        self.write_no_data(std_setup(StdRequest::SetConfiguration(cfg)))
+        self.write_no_data(StdRequest::set_configuration(cfg))
     }
 
     /// 对已寻址设备发送 `SET_INTERFACE`(选接口备用设置,UVC 开流切带宽档)。
     pub fn set_interface(&self, alt: u8, interface: u8) -> UsbResult<()> {
-        self.write_no_data(std_setup(StdRequest::SetInterface { alt, interface }))
+        self.write_no_data(StdRequest::set_interface(alt, interface))
     }
 
     /// `GET_DESCRIPTOR(Configuration)` 标准两段式:先读 9 字节头取
@@ -172,10 +175,7 @@ impl ControlEp {
         const USB_DT_CONFIGURATION: u8 = 2;
         let mut hdr = [0u8; 9];
         self.read(
-            std_setup(StdRequest::GetDescriptorConfiguration {
-                cfg_index,
-                w_length: 9,
-            }),
+            StdRequest::get_descriptor_configuration(cfg_index, 9),
             &mut hdr,
         )?;
         if hdr[1] != USB_DT_CONFIGURATION {
@@ -189,10 +189,7 @@ impl ControlEp {
         }
         let mut buf = [0u8; 4096];
         self.read(
-            std_setup(StdRequest::GetDescriptorConfiguration {
-                cfg_index,
-                w_length: total as u16,
-            }),
+            StdRequest::get_descriptor_configuration(cfg_index, total as u16),
             &mut buf[..total],
         )?;
         Ok(buf)

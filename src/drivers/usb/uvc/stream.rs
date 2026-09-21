@@ -70,24 +70,22 @@ impl UvcCamera {
         dump_probe("PROBE.SET", &probe_init);
 
         ep.write(
-            UvcRequest::SetCurStreaming {
-                interface: sel.vs_interface,
-                selector: VS_PROBE_CONTROL,
-                w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }
-            .build(),
+            UvcRequest::set_cur_streaming(
+                sel.vs_interface,
+                VS_PROBE_CONTROL,
+                UVC_PROBE_COMMIT_LEN as u16,
+            ),
             &probe_init,
         )?;
 
         let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
         if ep
             .read(
-                UvcRequest::GetMaxStreaming {
-                    interface: sel.vs_interface,
-                    selector: VS_PROBE_CONTROL,
-                    w_length: UVC_PROBE_COMMIT_LEN as u16,
-                }
-                .build(),
+                UvcRequest::get_max_streaming(
+                    sel.vs_interface,
+                    VS_PROBE_CONTROL,
+                    UVC_PROBE_COMMIT_LEN as u16,
+                ),
                 &mut probe_max,
             )
             .is_ok()
@@ -97,12 +95,11 @@ impl UvcCamera {
 
         let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
         ep.read(
-            UvcRequest::GetCurStreaming {
-                interface: sel.vs_interface,
-                selector: VS_PROBE_CONTROL,
-                w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }
-            .build(),
+            UvcRequest::get_cur_streaming(
+                sel.vs_interface,
+                VS_PROBE_CONTROL,
+                UVC_PROBE_COMMIT_LEN as u16,
+            ),
             &mut probe,
         )?;
         dump_probe("PROBE.CUR", &probe);
@@ -130,12 +127,11 @@ impl UvcCamera {
         }
 
         ep.write(
-            UvcRequest::SetCurStreaming {
-                interface: sel.vs_interface,
-                selector: VS_COMMIT_CONTROL,
-                w_length: UVC_PROBE_COMMIT_LEN as u16,
-            }
-            .build(),
+            UvcRequest::set_cur_streaming(
+                sel.vs_interface,
+                VS_COMMIT_CONTROL,
+                UVC_PROBE_COMMIT_LEN as u16,
+            ),
             &probe,
         )?;
 
