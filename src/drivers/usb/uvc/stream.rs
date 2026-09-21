@@ -12,28 +12,30 @@ const VS_COMMIT_CONTROL: u8 = 0x02;
 
 const UVC_PROBE_COMMIT_LEN: usize = 34;
 
-fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT_LEN] {
-    let mut buf = [0u8; UVC_PROBE_COMMIT_LEN];
-    // 实测 0c45:64ab 等廉价 webcam 不论我们 wCompQuality 设几（1/47/10000），
-    // 一旦 bmHint.D3=1 锁定 wCompQuality 就会切到"低质量量化表"（吐 ~21K），
-    // 反而比不锁定（吐 ~26K）糟糕。所以这里只锁定 frame interval (D0=1)，
-    // 不锁定 wCompQuality (D3=0)，让设备用出厂默认 quality。
-    buf[0] = 0x01;
-    buf[1] = 0x00;
-    buf[2] = sel.format_index;
-    buf[3] = sel.frame_index;
-    buf[4..8].copy_from_slice(&to_uvc_ticks(sel.frame_interval).to_le_bytes());
-    let w = sel.frame_w.max(640) as u32;
-    let h = sel.frame_h.max(480) as u32;
-    let est = if sel.is_mjpeg {
-        w.saturating_mul(h)
-    } else {
-        w.saturating_mul(h).saturating_mul(2)
-    };
-    buf[18..22].copy_from_slice(&est.to_le_bytes());
-    let pkt_total = dwc2::wmax_payload_per_uframe(sel.mps_raw);
-    buf[22..26].copy_from_slice(&pkt_total.to_le_bytes());
-    buf
+impl UvcStreamSelection {
+    fn build_probe_commit_payload(&self) -> [u8; UVC_PROBE_COMMIT_LEN] {
+        let mut buf = [0u8; UVC_PROBE_COMMIT_LEN];
+        // 实测 0c45:64ab 等廉价 webcam 不论我们 wCompQuality 设几（1/47/10000），
+        // 一旦 bmHint.D3=1 锁定 wCompQuality 就会切到"低质量量化表"（吐 ~21K），
+        // 反而比不锁定（吐 ~26K）糟糕。所以这里只锁定 frame interval (D0=1)，
+        // 不锁定 wCompQuality (D3=0)，让设备用出厂默认 quality。
+        buf[0] = 0x01;
+        buf[1] = 0x00;
+        buf[2] = self.format_index;
+        buf[3] = self.frame_index;
+        buf[4..8].copy_from_slice(&to_uvc_ticks(self.frame_interval).to_le_bytes());
+        let w = self.frame_w.max(640) as u32;
+        let h = self.frame_h.max(480) as u32;
+        let est = if self.is_mjpeg {
+            w.saturating_mul(h)
+        } else {
+            w.saturating_mul(h).saturating_mul(2)
+        };
+        buf[18..22].copy_from_slice(&est.to_le_bytes());
+        let pkt_total = dwc2::wmax_payload_per_uframe(self.mps_raw);
+        buf[22..26].copy_from_slice(&pkt_total.to_le_bytes());
+        buf
+    }
 }
 
 fn dump_probe(prefix: &str, p: &[u8]) {
@@ -66,7 +68,7 @@ impl UvcCamera {
         let sel = &mut self.sel;
         let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
 
-        let probe_init = build_probe_commit_payload(sel);
+        let probe_init = sel.build_probe_commit_payload();
         dump_probe("PROBE.SET", &probe_init);
 
         ep.write(
