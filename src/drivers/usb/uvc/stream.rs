@@ -4,6 +4,7 @@ use crate::drivers::usb::dwc2;
 use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
+use super::session::UvcCamera;
 use super::setup::{uvc_setup, UvcRequest};
 
 const VS_PROBE_CONTROL: u8 = 0x01;
@@ -50,95 +51,100 @@ fn dump_probe(prefix: &str, p: &[u8]) {
     let delay = u16::from_le_bytes([p[16], p[17]]);
     let max_video = u32::from_le_bytes([p[18], p[19], p[20], p[21]]);
     let max_pkt = u32::from_le_bytes([p[22], p[23], p[24], p[25]]);
-    log::info!("UVC: {prefix} bmHint={bm_hint:#06x} fmt={fmt_ix} frame={frame_ix} iv={interval} keyFrm={key_frm} pFrm={pframe} compQ={comp_q} compW={comp_w} delay={delay} dwMaxVideoFrameSize={max_video} dwMaxPayloadTransferSize={max_pkt}");
+    log::info!(
+        "UVC: {prefix} bmHint={bm_hint:#06x} fmt={fmt_ix} frame={frame_ix} iv={interval} keyFrm={key_frm} pFrm={pframe} compQ={comp_q} compW={comp_w} delay={delay} dwMaxVideoFrameSize={max_video} dwMaxPayloadTransferSize={max_pkt}"
+    );
 }
 
-/// `PROBE` → `GET_CUR` → `COMMIT` → `SET_INTERFACE`。
-///
-/// 协商后会更新 `sel.negotiated_payload_size`，并依据
-/// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
-pub(crate) fn uvc_start_video_stream(
-    ep: &dwc2::Ep0,
-    sel: &mut UvcStreamSelection,
-) -> UsbResult<()> {
-    let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
+impl UvcCamera {
+    /// `PROBE` → `GET_CUR` → `COMMIT` → `SET_INTERFACE`。
+    ///
+    /// 协商后会更新 `sel.negotiated_payload_size`，并依据
+    /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
+    pub(crate) fn start_stream(&mut self) -> UsbResult<()> {
+        let ep = &self.ep0;
+        let sel = &mut self.sel;
+        let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
 
-    let probe_init = build_probe_commit_payload(sel);
-    dump_probe("PROBE.SET", &probe_init);
+        let probe_init = build_probe_commit_payload(sel);
+        dump_probe("PROBE.SET", &probe_init);
 
-    ep.write(
-        uvc_setup(UvcRequest::SetCurStreaming {
-            interface: sel.vs_interface,
-            selector: VS_PROBE_CONTROL,
-            w_length: UVC_PROBE_COMMIT_LEN as u16,
-        }),
-        &probe_init,
-    )?;
-
-    let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
-    if ep
-        .read(
-            uvc_setup(UvcRequest::GetMaxStreaming {
+        ep.write(
+            uvc_setup(UvcRequest::SetCurStreaming {
                 interface: sel.vs_interface,
                 selector: VS_PROBE_CONTROL,
                 w_length: UVC_PROBE_COMMIT_LEN as u16,
             }),
-            &mut probe_max,
-        )
-        .is_ok()
-    {
-        dump_probe("PROBE.MAX", &probe_max);
-    }
+            &probe_init,
+        )?;
 
-    let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
-    ep.read(
-        uvc_setup(UvcRequest::GetCurStreaming {
-            interface: sel.vs_interface,
-            selector: VS_PROBE_CONTROL,
-            w_length: UVC_PROBE_COMMIT_LEN as u16,
-        }),
-        &mut probe,
-    )?;
-    dump_probe("PROBE.CUR", &probe);
+        let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
+        if ep
+            .read(
+                uvc_setup(UvcRequest::GetMaxStreaming {
+                    interface: sel.vs_interface,
+                    selector: VS_PROBE_CONTROL,
+                    w_length: UVC_PROBE_COMMIT_LEN as u16,
+                }),
+                &mut probe_max,
+            )
+            .is_ok()
+        {
+            dump_probe("PROBE.MAX", &probe_max);
+        }
 
-    sel.negotiated_payload_size = u32::from_le_bytes([probe[22], probe[23], probe[24], probe[25]]);
-    let negotiated_frame_size = u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
+        let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
+        ep.read(
+            uvc_setup(UvcRequest::GetCurStreaming {
+                interface: sel.vs_interface,
+                selector: VS_PROBE_CONTROL,
+                w_length: UVC_PROBE_COMMIT_LEN as u16,
+            }),
+            &mut probe,
+        )?;
+        dump_probe("PROBE.CUR", &probe);
 
-    // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt。
-    reselect_isoch_alt_for_payload(sel);
+        sel.negotiated_payload_size =
+            u32::from_le_bytes([probe[22], probe[23], probe[24], probe[25]]);
+        let negotiated_frame_size =
+            u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
 
-    // 若 reselect 降级到了更低带宽的 alt（例如 mult=1），须把 COMMIT 中的
-    // dwMaxPayloadTransferSize 压到该 alt 的实际每微帧吞吐，否则摄像头
-    // 按 3060 B 分包、主机只收 1020 B/uframe 会导致数据截断。
-    let alt_mps = dwc2::wmax_payload_per_uframe(sel.mps_raw);
-    if alt_mps > 0 && alt_mps < sel.negotiated_payload_size {
+        // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt。
+        reselect_isoch_alt_for_payload(sel);
+
+        // 若 reselect 降级到了更低带宽的 alt（例如 mult=1），须把 COMMIT 中的
+        // dwMaxPayloadTransferSize 压到该 alt 的实际每微帧吞吐，否则摄像头
+        // 按 3060 B 分包、主机只收 1020 B/uframe 会导致数据截断。
+        let alt_mps = dwc2::wmax_payload_per_uframe(sel.mps_raw);
+        if alt_mps > 0 && alt_mps < sel.negotiated_payload_size {
+            log::info!(
+                "UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
+                sel.negotiated_payload_size,
+                alt_mps
+            );
+            sel.negotiated_payload_size = alt_mps;
+            probe[22..26].copy_from_slice(&alt_mps.to_le_bytes());
+        }
+
+        ep.write(
+            uvc_setup(UvcRequest::SetCurStreaming {
+                interface: sel.vs_interface,
+                selector: VS_COMMIT_CONTROL,
+                w_length: UVC_PROBE_COMMIT_LEN as u16,
+            }),
+            &probe,
+        )?;
+
+        ep.set_interface(sel.alt_setting, sel.vs_interface)?;
+
         log::info!(
-            "UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
+            "UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
+            sel.vs_interface,
+            sel.alt_setting,
             sel.negotiated_payload_size,
-            alt_mps
+            negotiated_frame_size
         );
-        sel.negotiated_payload_size = alt_mps;
-        probe[22..26].copy_from_slice(&alt_mps.to_le_bytes());
+
+        Ok(())
     }
-
-    ep.write(
-        uvc_setup(UvcRequest::SetCurStreaming {
-            interface: sel.vs_interface,
-            selector: VS_COMMIT_CONTROL,
-            w_length: UVC_PROBE_COMMIT_LEN as u16,
-        }),
-        &probe,
-    )?;
-
-    ep.set_interface(sel.alt_setting, sel.vs_interface)?;
-
-    log::info!(
-        "UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
-        sel.vs_interface,
-        sel.alt_setting,
-        sel.negotiated_payload_size,
-        negotiated_frame_size
-    );
-
-    Ok(())
 }

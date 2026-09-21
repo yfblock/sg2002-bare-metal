@@ -10,7 +10,6 @@ use crate::drivers::usb::device::UsbDevice;
 use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{self, UvcStreamSelection};
-use super::{control, stream};
 use crate::drivers::usb::dwc2::Ep0;
 
 /// 已建立的 UVC 摄像头会话：设备 + 选定的流参数。
@@ -19,6 +18,8 @@ use crate::drivers::usb::dwc2::Ep0;
 pub struct UvcCamera {
     pub(crate) ep0: Ep0,
     pub(crate) sel: UvcStreamSelection,
+    /// VC 实体 ID 与 bmControls(控制请求的寻址材料;运行期调参可用)。
+    pub(crate) entities: descriptor::UvcControlEntities,
 }
 
 /// 打开摄像头会话（读配置描述符 → 解析 → 调校 → PROBE/COMMIT → 启动）。
@@ -35,16 +36,14 @@ pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera
     let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
     let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
 
-    let mut sel = descriptor::parse_uvc_video_stream(cfg, cfg_total, prefs)?;
+    let sel = descriptor::parse_uvc_video_stream(cfg, cfg_total, prefs)?;
+    let entities = descriptor::parse_uvc_control_entities(cfg, cfg_total).unwrap_or_default();
 
+    // 早构造:后续步骤(调校/开流/warmup)全部是会话方法。
+    let mut camera = UvcCamera { ep0, sel, entities };
     // 相机调校(自动白平衡/50Hz/AE;失败不阻塞——按出厂默认继续)
-    if let Some(ent) = descriptor::parse_uvc_control_entities(cfg, cfg_total) {
-        let _ = control::uvc_init_camera_controls(&ep0, &ent);
-    }
-
-    stream::uvc_start_video_stream(&ep0, &mut sel)?;
-
-    let camera = UvcCamera { ep0, sel };
+    let _ = camera.init_controls();
+    camera.start_stream()?;
     let _ = camera.capture_frame(); // warmup:丢弃首帧
     Ok(camera)
 }
