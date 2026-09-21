@@ -3,10 +3,8 @@
 //! 寄存器名与位定义对齐 Linux `drivers/usb/dwc2/hw.h`（DesignWare OTG 2.0），通过
 //! [`super::regs`] 中的 `tock-registers` 结构访问。
 //!
-//! 主机初始化对齐 CV182x/SG2002 路径（Linux
-//! `dwc2_set_cv182x_params` + `dwc2_core_host_init` / `dwc2_config_fifos`：UTMI 16-bit、HS、动态 FIFO、
-//! `GDFIFOCFG`、`PCGCTL`、`TOUTCAL`），见
-//! [Sipeed LicheeRV-Nano `params.c`](https://github.com/sipeed/LicheeRV-Nano-Build/blob/d4003f15b35d43ad4842f427050ab2bba0114fa5/linux_5.10/drivers/usb/dwc2/params.c#L217)。
+//! 主机初始化对齐 CV182x/SG2002 路径；SoC 专属旋钮（UTMI 宽度/动态 FIFO/
+//! GAHB DMA/PHY UTMI_OVERRIDE）在 [`super::cv182x`]。
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
@@ -15,16 +13,12 @@ use core::time::Duration;
 
 use crate::arch::time::delay;
 use crate::drivers::usb;
-/// GDFIFOCFG 配置分界（Linux `core.h`/`hcd.c`:版本 ≥ 2.91a 时写 GDFIFOCFG）。
-const DWC2_CORE_REV_2_91A: u32 = 0x291a;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x420a;
 use super::ch::{poll_until, spin_delay};
 use super::regs::{
-    GSNPSID,
-    GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
+    GSNPSID, GINTMSK, GINTSTS, GOTGCTL, GRSTCTL,
     GUSBCFG, HCFG, HPRT0,
-    Cv182xUsb2Phy,
 };
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
@@ -126,8 +120,6 @@ pub fn port_reset_pulse() {
 }
 
 
-// CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）
-
 fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
     if poll_until(3_000_000, 8, || dwc2.grstctl.is_set(field) == set) {
@@ -156,41 +148,6 @@ fn flush_tx_fifo_host_all() -> UsbResult<()> {
     Ok(())
 }
 
-/// 动态 FIFO：优先采用设备树常用值；超出 `GHWCFG3.DFIFO_DEPTH` 总深度时按
-/// Linux `dwc2_calculate_dynamic_fifo` 收缩（主机通道数 = 1 + `GHWCFG2.NUM_HOST_CHAN`）。
-fn init_host_fifos_cv182x() -> UsbResult<()> {
-    let dwc2 = usb::dwc2_regs();
-    let total = dwc2.ghwcfg3.read(GHWCFG3::DFIFO_DEPTH);
-    let hc = 1 + dwc2.ghwcfg2.read(GHWCFG2::NUM_HOST_CHAN);
-    let mut rx: u32 = 536;
-    let mut nptx: u32 = 32;
-    let mut ptx: u32 = 768;
-
-    if rx.saturating_add(nptx).saturating_add(ptx) > total {
-        rx = 516 + hc;
-        nptx = 256;
-        ptx = 768;
-    }
-    let sum = rx.saturating_add(nptx).saturating_add(ptx);
-    if sum > total {
-        ptx = total.saturating_sub(rx).saturating_sub(nptx);
-    }
-
-    dwc2.grxfsiz.write(GRXFSIZ::RXFDEP.val(rx));
-    dwc2.gnptxfsiz
-        .write(GNPTXFSIZ::NPTXFDEP.val(nptx) + GNPTXFSIZ::NPTXFSTADDR.val(rx));
-    dwc2.hptxfsiz
-        .write(HPTXFSIZ::PTXFDEP.val(ptx) + HPTXFSIZ::PTXFSTADDR.val(rx + nptx));
-
-    let ded = dwc2.ghwcfg4.is_set(GHWCFG4::DED_FIFO_EN);
-    if ded && dwc2.gsnpsid.read(GSNPSID::VERSION) >= DWC2_CORE_REV_2_91A {
-        let epbase = rx.wrapping_add(nptx).wrapping_add(ptx);
-        dwc2.gdfifocfg.modify(GDFIFOCFG::EPINFOBASE.val(epbase));
-    }
-
-    Ok(())
-}
-
 /// `dr_mode=otg` 时常用：使能 override 并置位 A-session / VBUS valid，否则根口可能无电气活动。
 fn init_gotgctl_otg_host_session_overrides() {
     usb::dwc2_regs().gotgctl.modify(
@@ -201,60 +158,6 @@ fn init_gotgctl_otg_host_session_overrides() {
             + GOTGCTL::VBVALOVAL::SET,
     );
     spin_delay(200_000);
-}
-
-/// UTMI 数据宽度按 `GHWCFG4.UTMI_PHY_DATA_WIDTH` 自适配；HS 超时校准；
-/// 保持 `FORCEHOSTMODE`（与 [`force_host_mode`] 一致）。
-///
-/// **PHYIF16 设错是 chirp 失败的关键根因之一**：cv182x 的 PHY 实测为 8-bit UTMI
-/// （vendor U-Boot `usb_gusbcfg = 0x40081400` 中 bit3 = 0 = 8-bit；
-/// vendor Linux 也未显式设 PHYIF16）。如果 IP 报告 8-bit-only 或 programmable，
-/// **必须** 把 PHYIF16 清零，否则 DWC2 与 PHY 的 UTMI 总线宽度不匹配，
-/// chirp K/J 信号无法被正确解码，HPRT0.SPD 永远停在 FS。
-fn init_gusbcfg_cv182x_utmi16_hs() {
-    let dwc2 = usb::dwc2_regs();
-    let utmi_w = dwc2.ghwcfg4.read(GHWCFG4::UTMI_PHY_DATA_WIDTH);
-    let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
-    log::debug!("USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
-        if want_16bit { 1 } else { 0 });
-    let mut field = GUSBCFG::FORCEHOSTMODE::SET
-        + GUSBCFG::ULPI_UTMI_SEL::CLEAR
-        + GUSBCFG::TOUTCAL.val(0x7);
-    if want_16bit {
-        field += GUSBCFG::PHYIF16::SET;
-    } else {
-        field += GUSBCFG::PHYIF16::CLEAR;
-    }
-    dwc2.gusbcfg.modify(field);
-}
-
-fn init_gahb_dma_cv182x() {
-    let dwc2 = usb::dwc2_regs();
-    let arch = dwc2.ghwcfg2.read(GHWCFG2::ARCH);
-    dwc2.gahbcfg.modify(
-        GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET,
-    );
-    if arch == 2 {
-        dwc2.gahbcfg.modify(GAHBCFG::DMA_EN::SET);
-    }
-}
-
-/// 与厂商 Linux `platform.c` host 路径对齐：**不设 `UTMI_OVERRIDE`**。
-///
-/// DWC2 在 host 模式下通过 UTMI 接口自行驱动 `dp_pulldown` / `dm_pulldown` 信号；
-/// 若 `UTMI_OVERRIDE`=1，PHY 忽略 DWC2 的 UTMI 信号，可能干扰控制器的连接检测。
-///
-/// 写 `REG014=0` 将控制权还给 DWC2（vendor kernel host 路径不碰 `REG014`；
-/// `utmi_chgdet_prepare`/`utmi_reset` 仅在 `CONFIG_USB_DWC2_PERIPHERAL` 充电检测里使用）。
-fn cv182x_usb2_phy_host_clear_utmi_override() {
-    // SAFETY: PHY 基址为编译期常量,视图恒有效。
-    let phy = unsafe { &*(crate::platform::CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) };
-    let old = phy.reg014.get();
-    phy.reg014.set(0);
-    spin_delay(200_000);
-    let now = phy.reg014.get();
-    log::debug!("USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
-        old, now);
 }
 
 /// M1：软复位、强制 Host、FIFO、GAHB、HCFG、根口上电（及 CV182x PHY 下拉）。
@@ -272,12 +175,12 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     core_soft_reset()?;
 
     init_gotgctl_otg_host_session_overrides();
-    init_gusbcfg_cv182x_utmi16_hs();
+    super::cv182x::init_gusbcfg_cv182x_utmi16_hs();
     dwc2.pcgctl.set(0);
-    init_gahb_dma_cv182x();
+    super::cv182x::init_gahb_dma_cv182x();
     // Linux 在 HS 下不置 HCFG_FSLSSUPP（RPi/全速演示才需要 FSLS）。
     dwc2.hcfg.modify(HCFG::FSLSSUPP::CLEAR + HCFG::FSLSPCLKSEL.val(0));
-    init_host_fifos_cv182x()?;
+    super::cv182x::init_host_fifos_cv182x()?;
     flush_tx_fifo_host_all()?;
     flush_rx_fifo_host()?;
 
@@ -289,7 +192,7 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     // 根口上电（PWR=1，不拉 RST）
     hprt0_port(true, false);
 
-    cv182x_usb2_phy_host_clear_utmi_override();
+    super::cv182x::cv182x_usb2_phy_host_clear_utmi_override();
 
     Ok(())
 }

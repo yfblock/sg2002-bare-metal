@@ -6,7 +6,8 @@
 //!
 //! 子模块：
 //! - [`regs`]：`tock-registers` 寄存器/位域/主机通道/PHY 结构。
-//! - [`controller`]：上电、软复位、Force Host、FIFO、`HPRT0` 根口操作。
+//! - [`controller`]：上电、软复位、Force Host、FIFO flush、`HPRT0` 根口操作（通用序列）。
+//! - [`cv182x`]：CV182x/SG2002 SoC 专属参数（动态 FIFO/UTMI 宽度/GAHB/PHY override）。
 //! - [`ch`]：主机通道原语（启停/等待/NAK-XACT 重试）+ USB ISR + HFNUM 时间。
 //! - [`dma`]：内部 DMA 窗（EP0 小缓冲 + UVC 等时大区）。
 //! - [`control`]：EP0 控制传输（标准请求 + Hub 端口请求包装）。
@@ -14,6 +15,7 @@
 
 pub mod regs;
 pub mod controller;
+pub mod cv182x;
 pub mod ch;
 pub mod control;
 pub mod dma;
