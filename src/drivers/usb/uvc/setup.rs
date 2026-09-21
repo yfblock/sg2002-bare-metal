@@ -25,35 +25,35 @@ pub(crate) enum UvcRequest {
 pub(crate) fn uvc_setup(req: UvcRequest) -> [u8; 8] {
     match req {
         UvcRequest::SetCurStreaming { interface, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0x21, 0x01, vl, vh, interface, 0, ll, lh]
         }
         UvcRequest::GetCurStreaming { interface, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0xA1, 0x81, vl, vh, interface, 0, ll, lh]
         }
         UvcRequest::GetMaxStreaming { interface, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0xA1, 0x83, vl, vh, interface, 0, ll, lh]
         }
         UvcRequest::SetCurControl { interface, entity_id, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
-            let [il, ih] = ((u16::from(entity_id) << 8) | u16::from(interface)).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
+            let [il, ih] = (((entity_id as u16) << 8) | interface as u16).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0x21, 0x01, vl, vh, il, ih, ll, lh]
         }
         UvcRequest::GetCurControl { interface, entity_id, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
-            let [il, ih] = ((u16::from(entity_id) << 8) | u16::from(interface)).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
+            let [il, ih] = (((entity_id as u16) << 8) | interface as u16).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0xA1, 0x81, vl, vh, il, ih, ll, lh]
         }
         UvcRequest::GetDefControl { interface, entity_id, selector, w_length } => {
-            let [vl, vh] = (u16::from(selector) << 8).to_le_bytes();
-            let [il, ih] = ((u16::from(entity_id) << 8) | u16::from(interface)).to_le_bytes();
+            let [vl, vh] = ((selector as u16) << 8).to_le_bytes();
+            let [il, ih] = (((entity_id as u16) << 8) | interface as u16).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0xA1, 0x87, vl, vh, il, ih, ll, lh]
         }

@@ -22,8 +22,8 @@ fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT
     buf[2] = sel.format_index;
     buf[3] = sel.frame_index;
     buf[4..8].copy_from_slice(&to_uvc_ticks(sel.frame_interval).to_le_bytes());
-    let w = u32::from(sel.frame_w.max(640));
-    let h = u32::from(sel.frame_h.max(480));
+    let w = sel.frame_w.max(640) as u32;
+    let h = sel.frame_h.max(480) as u32;
     let est = if sel.is_mjpeg { w.saturating_mul(h) } else { w.saturating_mul(h).saturating_mul(2) };
     buf[18..22].copy_from_slice(&est.to_le_bytes());
     let pkt_total = dwc2::wmax_payload_per_uframe(sel.mps_raw);

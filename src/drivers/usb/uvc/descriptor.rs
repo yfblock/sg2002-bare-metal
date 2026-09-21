@@ -32,7 +32,7 @@ const ITT_CAMERA: u16 = 0x0201;
 /// UVC `dwFrameInterval`(100ns tick) → 域内 [`Duration`]。
 #[inline]
 fn from_uvc_ticks(t: u32) -> Duration {
-    Duration::from_nanos(u64::from(t) * 100)
+    Duration::from_nanos(t as u64 * 100)
 }
 
 /// [`Duration`] → UVC `dwFrameInterval` u32(写 PROBE/COMMIT 负载用)。
@@ -145,7 +145,7 @@ impl<'a> Desc<'a> {
     /// 在 `buf[base]` 处构造视图;`end` 为扫描上限(`wTotalLength` 截断)。
     /// `bLength` 缺失 / <2 / 越出 `end` 返回 `None`。
     fn new(buf: &'a [u8], base: usize, end: usize) -> Option<Self> {
-        let bl = usize::from(*buf.get(base)?);
+        let bl = *buf.get(base)? as usize;
         if bl < 2 || base + bl > end {
             return None;
         }
@@ -257,11 +257,11 @@ fn parse_vs_frame(d: Desc, st: u8, fmt_ix: u8, pref_ticks: u32) -> Option<FrameP
 /// 帧尺寸打分:与偏好精确一致得最高;否则 ≤ 偏好面积越接近越好、超出按
 /// 超出量倒扣。
 fn frame_rank(p: &FramePick, prefs: &UvcPrefs) -> i32 {
-    let w = i32::from(p.w);
-    let h = i32::from(p.h);
+    let w = p.w as i32;
+    let h = p.h as i32;
     let area = w * h;
-    let pref_w = i32::from(prefs.frame_w);
-    let pref_h = i32::from(prefs.frame_h);
+    let pref_w = prefs.frame_w as i32;
+    let pref_h = prefs.frame_h as i32;
     // ① 精确尺寸优先：与偏好 frame_w/h 完全一致的 frame 得最高分。
     if w == pref_w && h == pref_h {
         return 2_000_000;
@@ -289,7 +289,7 @@ impl IsochCandidates {
             return Some(()); // 只关心 IN
         }
         let ep_num = ep_addr & 0x0F;
-        let total = u32::from(mps) * u32::from(mult);
+        let total = mps as u32 * mult as u32;
         log::info!("UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind={} mps={mps} mult={mult} total={total}/uframe mps_raw={mps_raw:#06x}",
             if xfer == ENDPOINT_ATTR_ISOCH { "Isoch" } else { "Other" });
         if xfer == ENDPOINT_ATTR_ISOCH {
@@ -323,7 +323,7 @@ pub(crate) fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPr
         return Err(UsbError::Protocol("cfg too short"));
     }
 
-    let mut i = usize::from(cfg[0]);
+    let mut i = cfg[0] as usize;
     if i >= len {
         return Err(UsbError::Protocol("bad cfg bLength"));
     }
@@ -496,7 +496,7 @@ pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option
     if len < 12 {
         return None;
     }
-    let mut i = usize::from(cfg[0]);
+    let mut i = cfg[0] as usize;
     if i >= len {
         return None;
     }
@@ -535,12 +535,12 @@ pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option
                     let tt = d.u16le(4).unwrap_or(0);
                     if tt == ITT_CAMERA {
                         out.camera_terminal_id = Some(id);
-                        let csize = usize::from(d.u8(14).unwrap_or(0));
+                        let csize = d.u8(14).unwrap_or(0) as usize;
                         let cmax = csize.min(d.len.saturating_sub(15)).min(4);
                         let mut bm = 0u32;
                         for k in 0..cmax {
                             if let Some(b) = d.u8(15 + k) {
-                                bm |= u32::from(b) << (8 * k);
+                                bm |= (b as u32) << (8 * k);
                             }
                         }
                         out.ct_controls = bm;
@@ -551,12 +551,12 @@ pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option
                     if d.len >= 9 =>
                 {
                     let id = d.u8(3).unwrap_or(0);
-                    let csize = usize::from(d.u8(7).unwrap_or(0));
+                    let csize = d.u8(7).unwrap_or(0) as usize;
                     let cmax = csize.min(d.len.saturating_sub(8)).min(4);
                     let mut bm = 0u32;
                     for k in 0..cmax {
                         if let Some(b) = d.u8(8 + k) {
-                            bm |= u32::from(b) << (8 * k);
+                            bm |= (b as u32) << (8 * k);
                         }
                     }
                     out.processing_unit_id = Some(id);

@@ -14,13 +14,13 @@ use tock_registers::fields::FieldValue;
 /// `wMaxPacketSize` 原始值 → 低 11 位（每事务最大字节数）。
 #[inline]
 pub fn wmax_mps(mps_raw: u16) -> u32 {
-    u32::from(mps_raw & 0x7FF)
+    (mps_raw & 0x7FF) as u32
 }
 
 /// `wMaxPacketSize` 原始值 → mult（高带宽事务数，1..=3）。
 #[inline]
 pub fn wmax_mult(mps_raw: u16) -> u32 {
-    (u32::from((mps_raw >> 11) & 0x3)) + 1
+    ((mps_raw >> 11) & 0x3) as u32 + 1
 }
 
 /// 每微帧总吞吐 = mps × mult。
@@ -47,7 +47,7 @@ impl IsochInEp {
     ///   bit12..11 为高带宽倍数减一）。
     #[inline]
     pub fn new(dev: u32, ep_num: u8, mps_raw: u16) -> Self {
-        Self { dev, ep_num: u32::from(ep_num), mps_raw }
+        Self { dev, ep_num: ep_num as u32, mps_raw }
     }
 
     /// 本端点的 HCCHAR(IN 方向)。参数为本次会话的单事务包长与

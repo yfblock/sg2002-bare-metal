@@ -2,7 +2,7 @@
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
 use super::channel::Channel;
-use super::dma::{dma_ptr, DMA_OFF_SMALL_IO, OFF_EP0};
+use super::dma::{dma_ptr, dma_rx_slice, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
 use tock_registers::fields::FieldValue;
 use crate::arch::cache;
@@ -90,7 +90,8 @@ impl Ep0 {
             )?;
             cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, wlen as usize);
 
-            let sl = core::slice::from_raw_parts(dma_ptr().add(OFF_EP0), wlen as usize);
+            let sl = dma_rx_slice(OFF_EP0, wlen as usize)
+                .ok_or(UsbError::Hardware("dma view"))?;
             if sl.len() < 12 {
                 return Err(UsbError::Protocol("short descriptor"));
             }

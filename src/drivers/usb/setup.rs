@@ -46,7 +46,7 @@ pub fn std_setup(req: StdRequest) -> [u8; 8] {
         ],
         StdRequest::GetDescriptorConfiguration { cfg_index, w_length } => {
             // USB 规范:wValue 高字节 = 描述符类型(2=CONFIGURATION),低字节 = 索引。
-            let [vl, vh] = (2 << 8 | u16::from(cfg_index)).to_le_bytes();
+            let [vl, vh] = (2 << 8 | cfg_index as u16).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
             [0x80, 6, vl, vh, 0x00, 0x00, ll, lh]
         }

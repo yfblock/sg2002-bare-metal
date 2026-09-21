@@ -241,7 +241,7 @@ impl<'a> DeviceHub<'a> {
         Ok(Self {
             ep0,
             nports: buf[2].min(MAX_HUB_PORTS),
-            pwr_on_pwr_good_ms: u32::from(buf[5]).saturating_mul(2),
+            pwr_on_pwr_good_ms: buf[5] as u32 * 2,
         })
     }
 }
@@ -255,20 +255,20 @@ impl Hub for DeviceHub<'_> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
         self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
-            port: u16::from(port),
+            port: port as u16,
             feature: HUB_PORT_FEATURE_POWER,
         }))
     }
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0.read(hub_setup(HubRequest::GetPortStatus(u16::from(port))), &mut buf)?;
+        self.ep0.read(hub_setup(HubRequest::GetPortStatus(port as u16)), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
         self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
-            port: u16::from(port),
+            port: port as u16,
             feature: HUB_PORT_FEATURE_RESET,
         }))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
@@ -279,20 +279,20 @@ impl Hub for DeviceHub<'_> {
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
         self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
-            port: u16::from(port),
+            port: port as u16,
             feature: HUB_PORT_FEATURE_C_CONNECTION,
         }))
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
         self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
-            port: u16::from(port),
+            port: port as u16,
             feature: HUB_PORT_FEATURE_C_RESET,
         }))
     }
 
     fn pwr_good(&self) -> Duration {
-        Duration::from_millis(u64::from(self.pwr_on_pwr_good_ms))
+        Duration::from_millis(self.pwr_on_pwr_good_ms as u64)
     }
 }
 

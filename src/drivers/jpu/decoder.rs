@@ -167,8 +167,8 @@ fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'stati
     let mut comp_info = 0u32;
     let mut mcu_block_num = 0u32;
     for (i, &(h, v)) in header.sampling.iter().enumerate().take(header.num_components as usize) {
-        comp_info |= (u32::from(h) << 2 | u32::from(v)) << (8 - 4 * i);
-        mcu_block_num += u32::from(h) * u32::from(v);
+        comp_info |= ((h as u32) << 2 | v as u32) << (8 - 4 * i);
+        mcu_block_num += h as u32 * v as u32;
     }
     let bus_req_num = match header.format {
         FORMAT_420 => BUS_REQ_NUM_SPARSE,
