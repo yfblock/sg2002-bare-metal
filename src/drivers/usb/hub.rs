@@ -219,7 +219,10 @@ impl Hub for DeviceHub<'_> {
     fn port_power(&self, port: u8) -> UsbResult<()> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
-        self.ep0.hub_set_port_feature(u16::from(port), HUB_PORT_FEATURE_POWER)
+        self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
+            port: u16::from(port),
+            feature: HUB_PORT_FEATURE_POWER,
+        }))
     }
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
@@ -229,7 +232,10 @@ impl Hub for DeviceHub<'_> {
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
-        self.ep0.hub_set_port_feature(u16::from(port), HUB_PORT_FEATURE_RESET)?;
+        self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
+            port: u16::from(port),
+            feature: HUB_PORT_FEATURE_RESET,
+        }))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
         crate::arch::time::delay(Duration::from_millis(100));
@@ -237,12 +243,17 @@ impl Hub for DeviceHub<'_> {
     }
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0
-            .hub_clear_port_feature(u16::from(port), HUB_PORT_FEATURE_C_CONNECTION)
+        self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
+            port: u16::from(port),
+            feature: HUB_PORT_FEATURE_C_CONNECTION,
+        }))
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0.hub_clear_port_feature(u16::from(port), HUB_PORT_FEATURE_C_RESET)
+        self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
+            port: u16::from(port),
+            feature: HUB_PORT_FEATURE_C_RESET,
+        }))
     }
 
     fn pwr_good(&self) -> Duration {
