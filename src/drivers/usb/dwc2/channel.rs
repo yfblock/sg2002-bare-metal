@@ -128,10 +128,10 @@ impl Channel {
     }
 
     /// 装填并启动一次通道传输:停通道 → 清协议裂片与中断 → 写传输尺寸 →
-    /// DMA 地址(fence 前后)→ 写 HCENA 启动。`tsiz` 为 HCTSIZ 字段组合
+    /// DMA 地址(fence 前后)→ 写 HCENA 启动。`hctsiz` 为 HCTSIZ 字段组合
     /// (PID+PKTCNT+XFERSIZE),`hcchar_ena` 须已含 `CHENA`(等时通道再加
     /// `ODDFRM`)。返回 DMA 物理地址(供错误日志)。MMIO 写序勿调整。
-    pub(crate) fn arm(&self, tsiz: FieldValue<u32, HCTSIZ::Register>, hcchar_ena: u32, dma_off: u32) -> UsbResult<u32> {
+    pub(crate) fn arm(&self, hctsiz: FieldValue<u32, HCTSIZ::Register>, hcchar_ena: u32, dma_off: u32) -> UsbResult<u32> {
         let chan = self.chan_regs();
         // 窗口偏移 → HCDMA 总线地址:identity 映射(VA=PA),缓冲在
         // rtos_region(≤0x90000000),低 32 位截断即总线地址。
@@ -141,7 +141,7 @@ impl Channel {
         chan.hcsplt.set(0);
         chan.hcint.set(HCINT_ALL_W1C);
         chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
-        chan.hctsiz.set(tsiz.value);
+        chan.hctsiz.set(hctsiz.value);
         usb_bus_fence_before_dma();
         chan.hcdma.set(dmap);
         usb_bus_fence_before_dma();
@@ -153,7 +153,7 @@ impl Channel {
     pub(crate) unsafe fn xfer(
         &self,
         hcchar: FieldValue<u32, HCCHAR::Register>,
-        tsiz: FieldValue<u32, HCTSIZ::Register>,
+        hctsiz: FieldValue<u32, HCTSIZ::Register>,
         dma_off: u32,
     ) -> UsbResult<HcintSnapshot> {
         // EP0 control 上：NAK = 设备未就绪，自动重试；XACTERR = CRC/PID/babble，
@@ -163,7 +163,7 @@ impl Channel {
         let mut xact_left = XACT_RETRIES;
         let hc_value = (hcchar + HCCHAR::CHENA::SET).value;
         for attempt in 0..=NAK_RETRIES {
-            let dmap = self.arm(tsiz, hc_value, dma_off)?;
+            let dmap = self.arm(hctsiz, hc_value, dma_off)?;
             let st = self.wait_halted()?;
             if st.is_set(HCINT::STALL) {
                 return Err(UsbError::Stall);
@@ -171,7 +171,7 @@ impl Channel {
             if st.is_set(HCINT::XACTERR) {
                 if xact_left == 0 {
                     log::info!("USB-XACT EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    self.0, hc_value, tsiz.value, dmap, st.get());
+                    self.0, hc_value, hctsiz.value, dmap, st.get());
                     return Err(UsbError::Protocol("ch xfer error (XACT)"));
                 }
                 xact_left -= 1;
@@ -182,7 +182,7 @@ impl Channel {
             if st.is_set(HCINT::NAK) {
                 if attempt == NAK_RETRIES {
                     log::info!("USB-NAK EXHAUSTED ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                    self.0, hc_value, tsiz.value, dmap, st.get());
+                    self.0, hc_value, hctsiz.value, dmap, st.get());
                     return Err(UsbError::Protocol("ch xfer NAK exhausted"));
                 }
                 // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF）。
@@ -191,7 +191,7 @@ impl Channel {
             }
             if !st.is_set(HCINT::XFERCOMPL) {
                 log::info!("USB-CHHLTD-NO-XFER ch={} hcchar={:#010x} hctsiz={:#010x} dma={:#010x} hcint={:#010x}",
-                self.0, hc_value, tsiz.value, dmap, st.get());
+                self.0, hc_value, hctsiz.value, dmap, st.get());
                 return Err(UsbError::Protocol("CHHLTD without XFERCOMPL"));
             }
             return Ok(st);
