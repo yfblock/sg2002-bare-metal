@@ -133,7 +133,9 @@ impl Channel {
     /// `ODDFRM`)。返回 DMA 物理地址(供错误日志)。MMIO 写序勿调整。
     pub(crate) fn arm(&self, tsiz: FieldValue<u32, HCTSIZ::Register>, hcchar_ena: u32, dma_off: u32) -> UsbResult<u32> {
         let chan = self.chan_regs();
-        let dmap = super::dma::dma_phys(dma_off as usize);
+        // 窗口偏移 → HCDMA 总线地址:identity 映射(VA=PA),缓冲在
+        // rtos_region(≤0x90000000),低 32 位截断即总线地址。
+        let dmap = (super::dma::dma_ptr() as usize + dma_off as usize) as u32;
         self.wait_disabled()?;
         // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
         chan.hcsplt.set(0);

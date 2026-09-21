@@ -36,13 +36,6 @@ pub(crate) fn dma_ptr() -> *mut u8 {
     core::ptr::addr_of_mut!(DMA_BUF).cast::<u8>()
 }
 
-/// DMA 窗口内偏移 → 写入 `HCDMA` 的总线地址。
-/// identity 映射（VA=PA），缓冲在 rtos_region（≤0x90000000），低 32 位截断即总线地址。
-#[inline]
-pub(crate) fn dma_phys(off: usize) -> u32 {
-    (dma_ptr() as usize + off) as u32
-}
-
 /// 安全的只读视图，供 UVC 等解析刚完成的 DMA 数据（**仅**在传输/cache invalidate 之后调用）。
 ///
 /// # 参数
