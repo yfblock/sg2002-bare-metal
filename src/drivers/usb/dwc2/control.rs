@@ -51,17 +51,14 @@ impl<'a> DeviceDescriptor<'a> {
 }
 
 impl ControlEp {
-    /// 绑定一台已寻址设备的 EP0。
+    /// 构造**默认地址 0** 句柄——枚举序列的入口(probe → set_address 迁移);
+    /// 已寻址设备的句柄由 [`Self::set_address`] 迁移产生,不从构造器来。
     ///
     /// # 参数
-    /// - `dev`：设备 USB 地址（7 位数值）。
-    /// - `control_ep_mps`：该设备 EP0 最大包长（8/16/32/64）。
+    /// - `control_ep_mps`：EP0 最大包长（8/16/32/64）。
     #[inline]
-    pub fn new(dev: u32, control_ep_mps: u32) -> Self {
-        Self {
-            dev,
-            mps: control_ep_mps,
-        }
+    pub fn new(control_ep_mps: u32) -> Self {
+        Self { dev: 0, mps: control_ep_mps }
     }
 
     /// 设备 USB 地址。
@@ -114,7 +111,7 @@ impl ControlEp {
     /// `(vid, pid, control_ep_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
-        let control_ep = ControlEp { dev: 0, mps: 64 };
+        let control_ep = ControlEp::new(64);
         // wLength = 18:设备描述符规范全长。
         let w_length: u16 = 18;
         control_ep.setup_stage(&StdRequest::get_descriptor_device())?;

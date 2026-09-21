@@ -53,7 +53,7 @@ pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResul
     }
     *next_addr = addr.saturating_add(1);
     // 默认地址句柄上发 SET_ADDRESS,成功后句柄自身迁移到新地址。
-    let mut control_ep = ControlEp::new(0, control_ep_mps);
+    let mut control_ep = ControlEp::new(control_ep_mps);
     control_ep.set_address(addr)?;
     // SET_ADDRESS 后恢复延时:USB 2.0 要求下一事务前用新地址;Linux 主机栈
     // 常用 ~10ms,这里给 50ms 富余(原迭代计数版按 1GHz 校准,25MHz 上
