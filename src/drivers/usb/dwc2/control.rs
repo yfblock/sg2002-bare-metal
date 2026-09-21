@@ -113,25 +113,32 @@ impl Ep0 {
         // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
         let ep0 = Ep0 { dev: 0, mps: 64 };
         unsafe {
-            let wlen: u16 = 18;
+            // wLength = 18:设备描述符规范全长。
+            let w_length: u16 = 18;
             ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
 
             Channel::CONTROL.xfer(
                 ep0.hcchar(true),
-                HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(wlen as u32),
+                HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(w_length as u32),
                 OFF_EP0 as u32,
             )?;
-            cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, wlen as usize);
+            cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, w_length as usize);
 
-            let sl = dma_rx_slice(OFF_EP0, wlen as usize)
-                .ok_or(UsbError::Hardware("dma view"))?;
-            let dd = DeviceDescriptor::new(sl)
-                .ok_or(UsbError::Protocol("short descriptor"))?;
-            let ep0_mps = normalize_ep0_mps(dd.max_packet_size0());
+            let descriptor = DeviceDescriptor::new(
+                dma_rx_slice(OFF_EP0, w_length as usize)
+                    .ok_or(UsbError::Hardware("dma view"))?,
+            )
+            .ok_or(UsbError::Protocol("short descriptor"))?;
+            let ep0_max_packet_size = normalize_ep0_mps(descriptor.max_packet_size0());
 
             ep0.status_stage(false)?;
 
-            Ok((dd.vendor_id(), dd.product_id(), ep0_mps, dd.device_class()))
+            Ok((
+                descriptor.vendor_id(),
+                descriptor.product_id(),
+                ep0_max_packet_size,
+                descriptor.device_class(),
+            ))
         }
     }
 
