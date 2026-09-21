@@ -4,12 +4,6 @@
 //! `bRequest`、`wValue`、`wIndex`、`wLength`。类专用构造见各自模块
 //! (hub 在 [`super::hub`],UVC 在 [`super::uvc::setup`])。
 
-/// `wLength`/`wValue`/`wIndex` 的 16 位小端拆分。USB 多字节字段一律小端。
-#[inline]
-fn wle(v: u16) -> [u8; 2] {
-    v.to_le_bytes()
-}
-
 /// 构造标准 `GET_DESCRIPTOR(Device)`（`wLength` 固定 18 = 整份设备描述符）。
 #[inline]
 pub fn get_descriptor_device() -> [u8; 8] {
@@ -20,7 +14,7 @@ pub fn get_descriptor_device() -> [u8; 8] {
         0x01, // wValue: DEVICE(high) index 0(low)
         0x00,
         0x00,
-        wle(18)[0], wle(18)[1],
+        18, 0, // wLength
     ]
 }
 
@@ -53,9 +47,8 @@ pub fn set_configuration(cfg: u8) -> [u8; 8] {
 #[inline]
 pub fn get_descriptor_configuration(cfg_index: u8, w_length: u16) -> [u8; 8] {
     // USB 规范:wValue 高字节 = 描述符类型(2=CONFIGURATION),低字节 = 索引。
-    let wvalue = 2 << 8 | u16::from(cfg_index);
-    let [vl, vh] = wle(wvalue);
-    let [ll, lh] = wle(w_length);
+    let [vl, vh] = (2 << 8 | u16::from(cfg_index)).to_le_bytes(); // 高字节=类型 2,低字节=索引
+    let [ll, lh] = w_length.to_le_bytes();
     [0x80, 6, vl, vh, 0x00, 0x00, ll, lh]
 }
 

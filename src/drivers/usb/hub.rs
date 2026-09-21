@@ -273,38 +273,32 @@ impl PortSpeed {
 
 // ---- Hub 类 SETUP 构造（与 UVC 类构造同款形态,归本模块）----
 
-/// `wValue`/`wIndex`/`wLength` 的 16 位小端拆分。
-#[inline]
-fn wle(v: u16) -> [u8; 2] {
-    v.to_le_bytes()
-}
-
 /// Hub：`SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
 #[inline]
 pub(crate) fn hub_set_port_feature(port: u16, feature: u16) -> [u8; 8] {
-    let [fl, fh] = wle(feature);
-    let [pl, ph] = wle(port);
+    let [fl, fh] = feature.to_le_bytes();
+    let [pl, ph] = port.to_le_bytes();
     [0x23, 0x03, fl, fh, pl, ph, 0, 0]
 }
 
 /// Hub：`CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
 #[inline]
 pub(crate) fn hub_clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
-    let [fl, fh] = wle(feature);
-    let [pl, ph] = wle(port);
+    let [fl, fh] = feature.to_le_bytes();
+    let [pl, ph] = port.to_le_bytes();
     [0x23, 0x01, fl, fh, pl, ph, 0, 0]
 }
 
 /// Hub：`GET_PORT_STATUS`（数据阶段固定 4 字节 `wPortStatus`/`wPortChange`）。
 #[inline]
 pub(crate) fn hub_get_port_status(port: u16) -> [u8; 8] {
-    let [pl, ph] = wle(port);
+    let [pl, ph] = port.to_le_bytes();
     [0xA3, 0x00, 0, 0, pl, ph, 4, 0]
 }
 
 /// Hub：`GET_DESCRIPTOR(Hub)` — 在 Hub **已 SET_CONFIGURATION** 后读取其描述符。
 #[inline]
 pub(crate) fn hub_get_descriptor(w_length: u16) -> [u8; 8] {
-    let [ll, lh] = wle(w_length);
+    let [ll, lh] = w_length.to_le_bytes();
     [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
 }
