@@ -34,8 +34,8 @@ pub const W0_RESET: u16 = 1 << 4;
 pub trait Hub {
     /// 下游端口数。
     fn nports(&self) -> u8;
-    /// 端口上电（外部 hub `SET_FEATURE(PORT_POWER)`；根口在 `dwc2_host_init`
-    /// 内已完成，恒成功）。
+    /// 端口上电（外部 hub `SET_FEATURE(PORT_POWER)`；根口写 `HPRT0.PWR`，
+    /// 经 [`dwc2::hprt0_port`] 的 W1C 安全写）。
     fn port_power(&self, port: u8) -> UsbResult<()>;
     /// 读端口状态 word0（统一布局；根口 `HPRT0` 现场转换）。
     fn port_status_w0(&self, port: u8) -> UsbResult<u16>;
@@ -128,7 +128,8 @@ impl Hub for RootHub {
     }
 
     fn port_power(&self, _port: u8) -> UsbResult<()> {
-        Ok(()) // dwc2_host_init 已置 HPRT0.PWR
+        dwc2::hprt0_port(true, false); // W1C 安全写:置 PWR,不拉 RST
+        Ok(())
     }
 
     fn port_status_w0(&self, _port: u8) -> UsbResult<u16> {

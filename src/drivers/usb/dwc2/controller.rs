@@ -87,7 +87,7 @@ fn force_host_mode() -> UsbResult<()> {
 /// 1. 屏蔽 W1C 位——`ENA` 等位读回的 1 表示"已使能"，写 1 的含义却是
 ///    "禁用/清除"，不清掉会误禁用端口（`HPRT0_W1C_MASK`）；
 /// 2. 清掉目标字段位——否则 `rst=false` 这种 CLEAR 语义写不进去。
-fn hprt0_port(pwr: bool, rst: bool) {
+pub fn hprt0_port(pwr: bool, rst: bool) {
     usb::dwc2_regs().hprt0.modify(
         HPRT0::PWR.val(pwr as u32)
             + HPRT0::RST.val(rst as u32)
@@ -160,7 +160,8 @@ fn init_gotgctl_otg_host_session_overrides() {
     spin_delay(200_000);
 }
 
-/// M1：软复位、强制 Host、FIFO、GAHB、HCFG、根口上电（及 CV182x PHY 下拉）。
+/// M1：软复位、强制 Host、FIFO、GAHB、HCFG（及 CV182x PHY 下拉）。
+/// 根口上电(`HPRT0.PWR`)不在此——由编排层经 `RootHub::port_power` 完成。
 ///
 /// **不在此处** 发 USB 总线复位：应在确认 HPRT0 的 `CONNSTS` 后调用 [`port_reset_pulse`]。
 ///
@@ -188,9 +189,6 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     dwc2.gintmsk.modify(GINTMSK::HCHINT::SET);
 
     dwc2.gintsts.set(0xFFFF_FFFF);
-
-    // 根口上电（PWR=1，不拉 RST）
-    hprt0_port(true, false);
 
     super::cv182x::cv182x_usb2_phy_host_clear_utmi_override();
 

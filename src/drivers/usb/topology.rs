@@ -99,11 +99,13 @@ fn walk_hub_ports(
     claimed.ok_or(UsbError::NotPresent)
 }
 
-/// 树遍历整条总线：根口等连接 → 取根口子设备 → 分派;返回被类驱动接管的
-/// 设备;根口无设备/无人接管 = `Err`。
+/// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
+/// 接管的设备;根口无设备/无人接管 = `Err`。「上电→等连→取子」与
+/// [`walk_hub_ports`] 同形。
 pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
     log::info!("[USB] topology: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
 
+    root.port_power(1)?; // HPRT0.PWR(controller bring-up 不再代劳)
     if !root.wait_connect(1, Duration::from_secs(5)) {
         return Err(UsbError::Hardware(
             "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
