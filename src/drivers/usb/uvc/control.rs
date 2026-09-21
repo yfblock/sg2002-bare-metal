@@ -116,7 +116,7 @@ fn pu_apply_one(ep: &dwc2::Ep0, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl) {
 ///
 /// `0c45:64ab` 等 SunplusIT/Sonix 摄像头出厂在某些场景下默认白平衡是手动模式，
 /// 这是图像偏色（偏蓝/偏紫）的最常见原因。
-pub fn uvc_init_camera_controls(
+pub(crate) fn uvc_init_camera_controls(
     ep: &dwc2::Ep0,
     ent: &UvcControlEntities,
 ) -> UsbResult<()> {

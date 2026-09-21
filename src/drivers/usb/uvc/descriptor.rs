@@ -317,7 +317,7 @@ impl IsochCandidates {
     }
 }
 
-pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) -> UsbResult<UvcStreamSelection> {
+pub(crate) fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) -> UsbResult<UvcStreamSelection> {
     let len = cfg_total.min(cfg.len());
     if len < 12 {
         return Err(UsbError::Protocol("cfg too short"));
@@ -491,7 +491,7 @@ pub struct UvcControlEntities {
 
 /// 解析配置描述符，找出 VideoControl 接口下的 CameraTerminal/ProcessingUnit 实体 ID
 /// 与各自的 `bmControls`，用于后续 SET_CUR 控制（自动白平衡 / 自动曝光等）。
-pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcControlEntities> {
+pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcControlEntities> {
     let len = cfg_total.min(cfg.len());
     if len < 12 {
         return None;
