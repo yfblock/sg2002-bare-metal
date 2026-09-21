@@ -2,7 +2,8 @@
 //!
 //! 子模块：
 //! - [`dwc2`]：DWC2 控制器（寄存器/bring-up/EP0 与等时传输）。
-//! - [`hub`]：Hub 抽象 + 总线枚举（Linux hub.c 模型）。
+//! - [`hub`]：Hub 抽象 + 树遍历/分派（Linux hub.c 模型）。
+//! - [`root`]：根 hub（DWC2 根口）+ 总线入口 `enumerate_bus`。
 //!
 //! 单板裸机、identity 映射（VA=PA）：控制器/PHY MMIO 基址直接取
 //! [`crate::platform`] 的地址表常量，无需运行时配置。
@@ -24,6 +25,7 @@ use crate::drivers::usb::dwc2::regs::Dwc2Regs;
 
 pub mod error;
 pub mod hub;
+pub mod root;
 pub mod setup;
 
 pub mod device;

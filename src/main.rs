@@ -43,7 +43,7 @@ mod yuv_buf;
 
 use core::time::Duration;
 
-use crate::drivers::usb::hub::RootHub;
+use crate::drivers::usb::root::RootHub;
 use crate::drivers::usb::{dwc2, uvc};
 
 const FPS_REPORT_EVERY: u32 = 100;
