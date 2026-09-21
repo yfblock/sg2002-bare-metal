@@ -16,14 +16,12 @@
 //! # 寄存器视图
 //!
 //! - [`dwc2_regs`]：DWC2 全局寄存器视图（基址 = [`crate::platform::DWC2_BASE`]）。
-//! - [`cv182x_phy_regs`]：CV182x（SG2002）片内 USB2 PHY 视图。
 //!
 //! DMA 与 CPU 视图一致性由 [`crate::arch::cache`] 的 clean / invalidate 辅助完成。
 //!
 //! 设备（外设）模式在孪生树 sg200x-bsp（feature `device-mode`）；本树仅主机。
 
 use crate::drivers::usb::dwc2::regs::Dwc2Regs;
-use crate::drivers::usb::dwc2::regs::Cv182xUsb2Phy;
 
 pub mod error;
 pub mod hub;
@@ -41,11 +39,5 @@ pub mod uvc;
 #[inline]
 pub fn dwc2_regs() -> &'static Dwc2Regs {
     unsafe { &*(crate::platform::DWC2_BASE as *const Dwc2Regs) }
-}
-
-/// 取 CV182x 片内 USB2 PHY 寄存器视图（基址为编译期常量，恒有效）。
-#[inline]
-pub fn cv182x_phy_regs() -> &'static Cv182xUsb2Phy {
-    unsafe { &*(crate::platform::CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) }
 }
 

@@ -24,6 +24,7 @@ use super::regs::{
     GSNPSID,
     GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GINTMSK, GINTSTS, GOTGCTL, GRXFSIZ, GNPTXFSIZ, HPTXFSIZ, GRSTCTL,
     GUSBCFG, HCFG, HPRT0,
+    Cv182xUsb2Phy,
 };
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
@@ -246,7 +247,8 @@ fn init_gahb_dma_cv182x() {
 /// 写 `REG014=0` 将控制权还给 DWC2（vendor kernel host 路径不碰 `REG014`；
 /// `utmi_chgdet_prepare`/`utmi_reset` 仅在 `CONFIG_USB_DWC2_PERIPHERAL` 充电检测里使用）。
 fn cv182x_usb2_phy_host_clear_utmi_override() {
-    let phy = usb::cv182x_phy_regs();
+    // SAFETY: PHY 基址为编译期常量,视图恒有效。
+    let phy = unsafe { &*(crate::platform::CV182X_USB2_PHY_BASE as *const Cv182xUsb2Phy) };
     let old = phy.reg014.get();
     phy.reg014.set(0);
     spin_delay(200_000);
