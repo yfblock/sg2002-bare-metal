@@ -78,10 +78,6 @@ pub(crate) fn spin_delay(n: u32) {
     }
 }
 
-pub(crate) fn usb_bus_fence_before_dma() {
-    riscv::asm::fence();
-}
-
 impl Channel {
     /// EP0 控制传输通道。
     pub const CONTROL: Channel = Channel(0);
@@ -148,9 +144,9 @@ impl Channel {
         chan.hcintmsk
             .set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
         chan.hctsiz.set(hctsiz.value);
-        usb_bus_fence_before_dma();
+        riscv::asm::fence(); // MMIO 写序:尺寸先于 DMA 地址落总线
         chan.hcdma.set(dmap);
-        usb_bus_fence_before_dma();
+        riscv::asm::fence(); // DMA 地址就绪后才允许启动通道
         chan.hcchar.set(hcchar_ena);
         Ok(dmap)
     }
