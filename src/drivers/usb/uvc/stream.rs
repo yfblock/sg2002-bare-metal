@@ -2,7 +2,6 @@
 
 use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
-use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
 use super::setup::{uvc_setup, UvcRequest};
@@ -53,7 +52,7 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 /// 协商后会更新 `sel.negotiated_payload_size`，并依据
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
 pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> UsbResult<()> {
-    let _ = ep.write_no_data(std_setup(StdRequest::SetInterface { alt: 0, interface: sel.vs_interface }));
+    let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
 
     let probe_init = build_probe_commit_payload(sel);
     dump_probe("PROBE.SET", &probe_init);
@@ -119,7 +118,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
         &probe,
     )?;
 
-    ep.write_no_data(std_setup(StdRequest::SetInterface { alt: sel.alt_setting, interface: sel.vs_interface }))?;
+    ep.set_interface(sel.alt_setting, sel.vs_interface)?;
 
     log::info!("UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
         sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, negotiated_frame_size);

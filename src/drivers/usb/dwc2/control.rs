@@ -122,6 +122,11 @@ impl Ep0 {
         self.write_no_data(std_setup(StdRequest::SetConfiguration { cfg }))
     }
 
+    /// 对已寻址设备发送 `SET_INTERFACE`(选接口备用设置,UVC 开流切带宽档)。
+    pub fn set_interface(&self, alt: u8, interface: u8) -> UsbResult<()> {
+        self.write_no_data(std_setup(StdRequest::SetInterface { alt, interface }))
+    }
+
     /// `GET_DESCRIPTOR(Configuration)` 标准两段式:先读 9 字节头取
     /// `wTotalLength`,再读全量(上限 4096)。纯标准请求组合,归本类型。
     pub fn get_configuration_descriptor(&self, cfg_index: u8) -> UsbResult<[u8; 4096]> {
