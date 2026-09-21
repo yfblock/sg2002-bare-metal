@@ -173,31 +173,30 @@ impl Ep0 {
         }
         self.setup_stage(&setup_pkt)?;
         let hc = self.hcchar(true); // IN 数据段:管道方向恒定,循环外组装
-        unsafe {
-            // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
-            let mut data1 = true;
-            for out_chunk in out.chunks_mut(self.mps as usize) {
-                let pid = if data1 {
-                    HCTSIZ::PID::Data1
-                } else {
-                    HCTSIZ::PID::Data0
-                };
+        // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
+        let mut data1 = true;
+        for out_chunk in out.chunks_mut(self.mps as usize) {
+            let pid = if data1 {
+                HCTSIZ::PID::Data1
+            } else {
+                HCTSIZ::PID::Data0
+            };
+            // SAFETY: DMA 源为窗口小 IO 区(偏移界内);CONTROL 通道由单核
+            // 调用方独占;invalidate 后读回的是设备刚写的数据。
+            unsafe {
                 Channel::CONTROL.xfer(
                     hc,
                     pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(out_chunk.len() as u32),
                     DMA_OFF_SMALL_IO as u32,
                 )?;
-                cache::dcache_invalidate_after_dma(dma_ptr().add(DMA_OFF_SMALL_IO), out_chunk.len());
-                core::ptr::copy_nonoverlapping(
-                    dma_ptr().add(DMA_OFF_SMALL_IO),
-                    out_chunk.as_mut_ptr(),
-                    out_chunk.len(),
-                );
-                data1 = !data1;
+                let dma_src = dma_ptr().add(DMA_OFF_SMALL_IO);
+                cache::dcache_invalidate_after_dma(dma_src, out_chunk.len());
+                core::ptr::copy_nonoverlapping(dma_src, out_chunk.as_mut_ptr(), out_chunk.len());
             }
-
-            self.status_stage(false)
+            data1 = !data1;
         }
+
+        self.status_stage(false)
     }
 
     /// 控制写：`SETUP` + `DATA` OUT（可多包）+ `STATUS` IN（ZLP）。
@@ -211,31 +210,30 @@ impl Ep0 {
         }
         self.setup_stage(&setup_pkt)?;
         let hc = self.hcchar(false); // OUT 数据段:管道方向恒定,循环外组装
-        unsafe {
-            // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
-            let mut data1 = true;
-            for chunk in data.chunks(self.mps as usize) {
-                core::ptr::copy_nonoverlapping(
-                    chunk.as_ptr(),
-                    dma_ptr().add(DMA_OFF_SMALL_IO),
-                    chunk.len(),
-                );
-                cache::dcache_clean_for_dma(dma_ptr().add(DMA_OFF_SMALL_IO), chunk.len());
-                let pid = if data1 {
-                    HCTSIZ::PID::Data1
-                } else {
-                    HCTSIZ::PID::Data0
-                };
+        // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
+        let mut data1 = true;
+        for chunk in data.chunks(self.mps as usize) {
+            let pid = if data1 {
+                HCTSIZ::PID::Data1
+            } else {
+                HCTSIZ::PID::Data0
+            };
+            // SAFETY: 拷贝目标为窗口小 IO 区(偏移界内),与源切片不重叠;
+            // CONTROL 通道由单核调用方独占。
+            unsafe {
+                let dma_dst = dma_ptr().add(DMA_OFF_SMALL_IO);
+                core::ptr::copy_nonoverlapping(chunk.as_ptr(), dma_dst, chunk.len());
+                cache::dcache_clean_for_dma(dma_dst, chunk.len());
                 Channel::CONTROL.xfer(
                     hc,
                     pid + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(chunk.len() as u32),
                     DMA_OFF_SMALL_IO as u32,
                 )?;
-                data1 = !data1;
             }
-
-            self.status_stage(true)
+            data1 = !data1;
         }
+
+        self.status_stage(true)
     }
 }
 
