@@ -5,7 +5,7 @@ use crate::drivers::usb::dwc2;
 use crate::drivers::usb::setup::{std_setup, StdRequest};
 
 use super::descriptor::{reselect_isoch_alt_for_payload, UvcStreamSelection};
-use super::setup::{video_streaming_setup, VideoStreamingRequest};
+use super::setup::{uvc_setup, UvcRequest};
 
 const VS_PROBE_CONTROL: u8 = 0x01;
 const VS_COMMIT_CONTROL: u8 = 0x02;
@@ -59,7 +59,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     dump_probe("PROBE.SET", &probe_init);
 
     ep.write(
-        video_streaming_setup(VideoStreamingRequest::SetCur {
+        uvc_setup(UvcRequest::SetCurStreaming {
             interface: sel.vs_interface,
             selector: VS_PROBE_CONTROL,
             w_length: UVC_PROBE_COMMIT_LEN as u16,
@@ -70,7 +70,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     let mut probe_max = [0u8; UVC_PROBE_COMMIT_LEN];
     if ep
         .read(
-            video_streaming_setup(VideoStreamingRequest::GetMax {
+            uvc_setup(UvcRequest::GetMaxStreaming {
                 interface: sel.vs_interface,
                 selector: VS_PROBE_CONTROL,
                 w_length: UVC_PROBE_COMMIT_LEN as u16,
@@ -84,7 +84,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
 
     let mut probe = [0u8; UVC_PROBE_COMMIT_LEN];
     ep.read(
-        video_streaming_setup(VideoStreamingRequest::GetCur {
+        uvc_setup(UvcRequest::GetCurStreaming {
             interface: sel.vs_interface,
             selector: VS_PROBE_CONTROL,
             w_length: UVC_PROBE_COMMIT_LEN as u16,
@@ -111,7 +111,7 @@ pub fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> U
     }
 
     ep.write(
-        video_streaming_setup(VideoStreamingRequest::SetCur {
+        uvc_setup(UvcRequest::SetCurStreaming {
             interface: sel.vs_interface,
             selector: VS_COMMIT_CONTROL,
             w_length: UVC_PROBE_COMMIT_LEN as u16,
