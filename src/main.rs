@@ -65,7 +65,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
         "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
         cam.vid,
         cam.pid,
-        cam.ep0.dev(),
+        cam.control_ep.dev(),
         cam.speed.as_str()
     ));
     let prefs = uvc::UvcPrefs {
@@ -82,7 +82,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
 
 /// 主循环:capture → JPU decode → IVE CSC → mailbox notify。
 ///
-/// `ep0`/`sel` 由 rust_main 的初始化阶段产生。
+/// `control_ep`/`sel` 由 rust_main 的初始化阶段产生。
 fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
     let mut frames: u32 = 0;
     let mut fps_mark_frame = 0u32;

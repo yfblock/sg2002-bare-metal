@@ -55,10 +55,10 @@ impl ControlEp {
     ///
     /// # 参数
     /// - `dev`：设备 USB 地址（7 位数值）。
-    /// - `ep0_mps`：该设备 EP0 最大包长（8/16/32/64）。
+    /// - `control_ep_mps`：该设备 EP0 最大包长（8/16/32/64）。
     #[inline]
-    pub fn new(dev: u32, ep0_mps: u32) -> Self {
-        Self { dev, mps: ep0_mps }
+    pub fn new(dev: u32, control_ep_mps: u32) -> Self {
+        Self { dev, mps: control_ep_mps }
     }
 
     /// 设备 USB 地址。
@@ -108,17 +108,17 @@ impl ControlEp {
     /// 枚举首步：在默认地址 **0** 上读 `GET_DESCRIPTOR(DEVICE, 18)`。
     ///
     /// # 返回值
-    /// `(vid, pid, ep0_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
+    /// `(vid, pid, control_ep_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
-        let ep0 = ControlEp { dev: 0, mps: 64 };
+        let control_ep = ControlEp { dev: 0, mps: 64 };
         // wLength = 18:设备描述符规范全长。
         let w_length: u16 = 18;
-        ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
+        control_ep.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
 
         unsafe {
             Channel::CONTROL.xfer(
-                ep0.hcchar(true),
+                control_ep.hcchar(true),
                 HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(w_length as u32),
                 OFF_EP0 as u32,
             )?;
@@ -131,7 +131,7 @@ impl ControlEp {
         .ok_or(UsbError::Protocol("short descriptor"))?;
         let ep0_max_packet_size = normalize_ep0_mps(descriptor.max_packet_size0());
 
-        ep0.status_stage(false)?;
+        control_ep.status_stage(false)?;
 
         Ok((
             descriptor.vendor_id(),
@@ -148,9 +148,9 @@ impl ControlEp {
     ///
     /// # 参数
     /// - `addr`：设备新地址，合法 **1..=127**。
-    /// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
-    pub fn set_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
-        ControlEp::new(0, ep0_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
+    /// - `control_ep_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
+    pub fn set_address(addr: u8, control_ep_mps: u32) -> UsbResult<()> {
+        ControlEp::new(0, control_ep_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。
@@ -213,7 +213,7 @@ impl ControlEp {
     /// - `out`：接收缓冲区，长度须与 SETUP 中 `wLength` 一致且在 `(0,4096]`。
     pub fn read(&self, setup_packet: [u8; 8], out: &mut [u8]) -> UsbResult<()> {
         if out.is_empty() || out.len() > 4096 {
-            return Err(UsbError::Protocol("bad ep0 read len"));
+            return Err(UsbError::Protocol("bad control_ep read len"));
         }
         self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(true); // IN 数据段:管道方向恒定,循环外组装
@@ -250,7 +250,7 @@ impl ControlEp {
     /// - `data`：OUT 数据阶段负载（最大 4096 字节）。
     pub fn write(&self, setup_packet: [u8; 8], data: &[u8]) -> UsbResult<()> {
         if data.len() > 4096 {
-            return Err(UsbError::Protocol("bad ep0 write data len"));
+            return Err(UsbError::Protocol("bad control_ep write data len"));
         }
         self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(false); // OUT 数据段:管道方向恒定,循环外组装

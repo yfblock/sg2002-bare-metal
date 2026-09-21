@@ -225,7 +225,7 @@ const MAX_HUB_PORTS: u8 = 16;
 /// 外部 hub：持有已寻址设备的 [`dwc2::ControlEp`]（Copy 值，随本句柄走）与其
 /// 描述符信息。
 pub struct DeviceHub {
-    ep0: ControlEp,
+    control_ep: ControlEp,
     nports: u8,
     /// `bPwrOn2PwrGood` 已换算的毫秒数。
     pwr_on_pwr_good_ms: u32,
@@ -233,14 +233,14 @@ pub struct DeviceHub {
 
 impl DeviceHub {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
-    pub fn new(ep0: ControlEp) -> UsbResult<Self> {
+    pub fn new(control_ep: ControlEp) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
-        ep0.read(hub_setup(HubRequest::GetHubDescriptor(64)), &mut buf)?;
+        control_ep.read(hub_setup(HubRequest::GetHubDescriptor(64)), &mut buf)?;
         if buf[0] < 7 || buf[1] != USB_DT_HUB {
             return Err(UsbError::Protocol("invalid hub descriptor"));
         }
         Ok(Self {
-            ep0,
+            control_ep,
             nports: buf[2].min(MAX_HUB_PORTS),
             pwr_on_pwr_good_ms: buf[5] as u32 * 2,
         })
@@ -255,7 +255,7 @@ impl Hub for DeviceHub {
     fn port_power(&self, port: u8) -> UsbResult<()> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
-        self.ep0
+        self.control_ep
             .write_no_data(hub_setup(HubRequest::SetPortFeature {
                 port: port as u16,
                 feature: HUB_PORT_FEATURE_POWER,
@@ -264,13 +264,13 @@ impl Hub for DeviceHub {
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0
+        self.control_ep
             .read(hub_setup(HubRequest::GetPortStatus(port as u16)), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
-        self.ep0
+        self.control_ep
             .write_no_data(hub_setup(HubRequest::SetPortFeature {
                 port: port as u16,
                 feature: HUB_PORT_FEATURE_RESET,
@@ -282,7 +282,7 @@ impl Hub for DeviceHub {
     }
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0
+        self.control_ep
             .write_no_data(hub_setup(HubRequest::ClearPortFeature {
                 port: port as u16,
                 feature: HUB_PORT_FEATURE_C_CONNECTION,
@@ -290,7 +290,7 @@ impl Hub for DeviceHub {
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0
+        self.control_ep
             .write_no_data(hub_setup(HubRequest::ClearPortFeature {
                 port: port as u16,
                 feature: HUB_PORT_FEATURE_C_RESET,
@@ -382,17 +382,17 @@ fn dispatch_device(dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
         dev.vid, dev.pid, dev.dev_class);
 
     if dev.is_hub() {
-        log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> Hub addr={}", dev.ep0.dev() as u8);
-        return DeviceHub::new(dev.ep0)?.walk_subtree(next_addr);
+        log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> Hub addr={}", dev.control_ep.dev() as u8);
+        return DeviceHub::new(dev.control_ep)?.walk_subtree(next_addr);
     }
 
     // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
     log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> function addr={} first_ifc_class={:02x}",
-        dev.ep0.dev(), dev.iface_class);
+        dev.control_ep.dev(), dev.iface_class);
     match DRIVERS.iter().find(|d| d.matches(&dev)) {
         Some(driver) => {
             log::info!(target: "sg200x_bsp::usb::hub", "[USB]   -> driver \"{}\" took addr={}",
-                driver.name(), dev.ep0.dev());
+                driver.name(), dev.control_ep.dev());
             Ok(dev)
         }
         None => Err(UsbError::NotPresent),

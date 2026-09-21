@@ -62,7 +62,7 @@ impl UvcCamera {
     /// 协商后会更新 `sel.negotiated_payload_size`，并依据
     /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
     pub(crate) fn start_stream(&mut self) -> UsbResult<()> {
-        let ep = &self.ep0;
+        let ep = &self.control_ep;
         let sel = &mut self.sel;
         let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
 

@@ -158,7 +158,7 @@ impl UvcCamera {
     /// **关键**：等时模式下 `mult=1` 时，每次 `IsochInEp::read_uframe` 返回的整个数据（最多 mps 字节）就是
     /// **一个完整的 USB 包 = 一个 UVC 数据包**（带 12 字节头），**不可再切分**。
     pub fn capture_frame(&self) -> UsbResult<usize> {
-        let iso = dwc2::IsochInEp::new(self.ep0.dev(), self.sel.ep_num, self.sel.mps_raw);
+        let iso = dwc2::IsochInEp::new(self.control_ep.dev(), self.sel.ep_num, self.sel.mps_raw);
         let mps_low = dwc2::wmax_mps(self.sel.mps_raw).max(1) as usize;
         let mult = dwc2::wmax_mult(self.sel.mps_raw).clamp(1, 3) as usize;
         let jpeg_cap = UVC_BULK_DMA_CAP.saturating_sub(UVC_WORK_AREA_BYTES);

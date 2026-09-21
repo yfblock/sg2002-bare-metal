@@ -25,7 +25,7 @@ pub const USB_DT_INTERFACE: u8 = 4;
 /// 一台已枚举设备：身份 + 控制端点句柄（枚举后身份不再散架为元组）。
 #[derive(Clone, Copy)]
 pub struct UsbDevice {
-    pub ep0: ControlEp,
+    pub control_ep: ControlEp,
     pub vid: u16,
     pub pid: u16,
     pub dev_class: u8,
@@ -46,22 +46,22 @@ impl UsbDevice {
 /// 公共枚举序列（在默认地址 0 上）：探测 → `SET_ADDRESS` → `SET_CONFIGURATION`
 /// → 读首接口类，产出完整设备身份。hub 与功能设备共用。
 pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResult<UsbDevice> {
-    let (vid, pid, ep0_mps, dev_class) = ControlEp::probe_default_addr()?;
+    let (vid, pid, control_ep_mps, dev_class) = ControlEp::probe_default_addr()?;
     let addr = *next_addr;
     if addr >= MAX_USB_ADDR {
         return Err(UsbError::Protocol("usb address space full"));
     }
     *next_addr = addr.saturating_add(1);
-    ControlEp::set_address(addr, ep0_mps)?;
+    ControlEp::set_address(addr, control_ep_mps)?;
     // SET_ADDRESS 后恢复延时:USB 2.0 要求下一事务前用新地址;Linux 主机栈
     // 常用 ~10ms,这里给 50ms 富余(原迭代计数版按 1GHz 校准,25MHz 上
     // 实测 ~27s 纯属过杀)。
     crate::arch::time::delay(core::time::Duration::from_millis(50));
-    let ep0: ControlEp = ControlEp::new(addr as u32, ep0_mps);
-    ep0.set_configuration(1)?;
-    let iface_class = first_interface_class(&ep0).unwrap_or(0);
+    let control_ep: ControlEp = ControlEp::new(addr as u32, control_ep_mps);
+    control_ep.set_configuration(1)?;
+    let iface_class = first_interface_class(&control_ep).unwrap_or(0);
     Ok(UsbDevice {
-        ep0,
+        control_ep,
         vid,
         pid,
         dev_class,

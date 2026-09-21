@@ -44,7 +44,7 @@ impl UvcCamera {
         }
         .build();
         let buf = [value];
-        self.ep0.write(setup, &buf).is_ok()
+        self.control_ep.write(setup, &buf).is_ok()
     }
 
     fn try_get_cur_u16(&self, entity: u8, selector: u8) -> Option<u16> {
@@ -56,7 +56,7 @@ impl UvcCamera {
         }
         .build();
         let mut buf = [0u8; 2];
-        if self.ep0.read(setup, &mut buf).is_ok() {
+        if self.control_ep.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
         } else {
             None
@@ -72,7 +72,7 @@ impl UvcCamera {
         }
         .build();
         let mut buf = [0u8; 2];
-        if self.ep0.read(setup, &mut buf).is_ok() {
+        if self.control_ep.read(setup, &mut buf).is_ok() {
             Some(u16::from_le_bytes(buf))
         } else {
             None
@@ -88,7 +88,7 @@ impl UvcCamera {
         }
         .build();
         let buf = value.to_le_bytes();
-        self.ep0.write(setup, &buf).is_ok()
+        self.control_ep.write(setup, &buf).is_ok()
     }
 
     /// 把 ProcessingUnit 的 2 字节控制项设为 `GET_DEF` 出厂默认值。
