@@ -27,24 +27,20 @@ pub fn std_setup(req: StdRequest) -> [u8; 8] {
             0x80, // bmRequestType: Dir IN, Type Standard, Recipient Device
             6,    // GET_DESCRIPTOR
             0x00, 0x01, // wValue: DEVICE(high) index 0(low)
-            0x00, 0x00,
-            18, 0, // wLength
+            0x00, 0x00, 18, 0, // wLength
         ],
         StdRequest::SetAddress(addr) => [
-            0x00,
-            5, // SET_ADDRESS;wValue = addr
-            addr, 0,
-            0, 0,
-            0, 0,
+            0x00, 5, // SET_ADDRESS;wValue = addr
+            addr, 0, 0, 0, 0, 0,
         ],
         StdRequest::SetConfiguration(cfg) => [
-            0x00,
-            9, // SET_CONFIGURATION;wValue = cfg
-            cfg, 0,
-            0, 0,
-            0, 0,
+            0x00, 9, // SET_CONFIGURATION;wValue = cfg
+            cfg, 0, 0, 0, 0, 0,
         ],
-        StdRequest::GetDescriptorConfiguration { cfg_index, w_length } => {
+        StdRequest::GetDescriptorConfiguration {
+            cfg_index,
+            w_length,
+        } => {
             // USB 规范:wValue 高字节 = 描述符类型(2=CONFIGURATION),低字节 = 索引。
             let [vl, vh] = (2 << 8 | cfg_index as u16).to_le_bytes();
             let [ll, lh] = w_length.to_le_bytes();
@@ -53,9 +49,7 @@ pub fn std_setup(req: StdRequest) -> [u8; 8] {
         StdRequest::SetInterface { alt, interface } => [
             0x01, // bmRequestType: Dir OUT, Type Standard, Recipient Interface
             0x0B, // SET_INTERFACE;wValue = alt, wIndex = interface
-            alt, 0,
-            interface, 0,
-            0, 0,
+            alt, 0, interface, 0, 0, 0,
         ],
     }
 }

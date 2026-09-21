@@ -223,7 +223,8 @@ pub fn csc(
     reg.top_ctrl1.write(TopCtrl1::SOFTRST::CLEAR);
 
     // 2. 图像尺寸
-    reg.top_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
+    reg.top_size
+        .write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
 
     // 3. FILTEROP 配置为 CSC，清 3ch/WDMA 使能
     reg.fop_mode.write(FopMode::MODE::CSC);
@@ -231,9 +232,18 @@ pub fn csc(
 
     // 4. CSC 系数（12 个 19-bit，软件系数）
     let coefs: [&ReadWrite<u32>; 12] = [
-        &reg.csc_c00, &reg.csc_c01, &reg.csc_c02, &reg.csc_off0,
-        &reg.csc_c10, &reg.csc_c11, &reg.csc_c12, &reg.csc_off1,
-        &reg.csc_c20, &reg.csc_c21, &reg.csc_c22, &reg.csc_off2,
+        &reg.csc_c00,
+        &reg.csc_c01,
+        &reg.csc_c02,
+        &reg.csc_off0,
+        &reg.csc_c10,
+        &reg.csc_c11,
+        &reg.csc_c12,
+        &reg.csc_off1,
+        &reg.csc_c20,
+        &reg.csc_c21,
+        &reg.csc_c22,
+        &reg.csc_off2,
     ];
     for (reg, &c) in coefs.iter().zip(CSC_COEF_BT601_LIMIT.iter()) {
         reg.set(c & 0x7FFFF);
@@ -241,7 +251,8 @@ pub fn csc(
     reg.coef_upd.write(CoefUpd::COEFF_SW_UPDATE::SET);
 
     // 5. CSC 使能 + 模式（mode 0 = BT601 limited YUV2RGB）
-    reg.csc_ctrl.write(CscCtrl::ENABLE::SET + CscCtrl::ENMODE.val(0));
+    reg.csc_ctrl
+        .write(CscCtrl::ENABLE::SET + CscCtrl::ENMODE.val(0));
 
     // 6. 清 IMG_IN IP
     reg.img_in_ip.write(ImgInIp::IP_CLR_W1T::SET);
@@ -251,7 +262,8 @@ pub fn csc(
     // 7. 输入图像配置
     reg.y_pitch.set(y_pitch);
     reg.c_pitch.set(c_pitch);
-    reg.img_in_size.write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
+    reg.img_in_size
+        .write(TopSize::W_M1.val(wm1) + TopSize::H_M1.val(hm1));
     reg.img_in_ctrl.write(
         ImgInCtrl::SRC_SEL::DRAM
             + ImgInCtrl::FMT_SEL.val(input_fmt())
@@ -264,7 +276,8 @@ pub fn csc(
     reg.img_upd.write(ImgUpd::SHRD_SEL::SET);
 
     // 8. 使能 FILTEROP top
-    reg.top_enable.write(TopEnable::IMG_IN::SET + TopEnable::CSC::SET + TopEnable::FILTEROP::SET);
+    reg.top_enable
+        .write(TopEnable::IMG_IN::SET + TopEnable::CSC::SET + TopEnable::FILTEROP::SET);
 
     // 9. 输出 DMA 配置
     reg.out_y_pitch.set(r_pitch);

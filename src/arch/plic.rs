@@ -4,7 +4,7 @@
 
 use core::num::NonZeroU32;
 use core::ptr::NonNull;
-use riscv_plic::{Plic, PLICRegs};
+use riscv_plic::{PLICRegs, Plic};
 
 /// 小核邮箱中断 PLIC source(intr_conf.h: MBOX_INT_C906_2ND = 61)。
 pub const MBOX_IRQ_SRC: u32 = 61;

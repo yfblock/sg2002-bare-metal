@@ -6,9 +6,9 @@
 //! 注意复位是全片性质：b2sbm 双核测试期间触发会让测试 FAIL 并重启板子，
 //! 但板子回到可继续操作的干净状态，而不是 wedged 死机。
 
-use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::Writeable;
 use tock_registers::registers::{ReadWrite, WriteOnly};
+use tock_registers::{register_bitfields, register_structs};
 
 use crate::platform::WDT_BASE;
 

@@ -4,8 +4,8 @@
 //! `USB_VBUS_DET` 功能还是 GPIO——USB host 模式需要 VBUS 检测走 GPIO 轮询，
 //! 故选 `XGPIOB_6`（platform.rs 再配 GPIO1_6 输出拉高）。
 
-use tock_registers::{register_bitfields, register_structs};
 use tock_registers::registers::ReadWrite;
+use tock_registers::{register_bitfields, register_structs};
 
 use crate::platform::FMUX_BASE;
 

@@ -10,12 +10,12 @@
 //! - [`stream`]：`PROBE`/`COMMIT` 协商与流启停。
 //! - [`capture`]：Isoch IN 抓帧与 MJPEG 帧组装。
 
-pub mod setup;
-pub mod descriptor;
-pub mod control;
-pub mod session;
-pub mod stream;
 pub mod capture;
+pub mod control;
+pub mod descriptor;
+pub mod session;
+pub mod setup;
+pub mod stream;
 
 // 重导出仅保留跨模块消费项:会话门面 + DMA 偏移(main 取 JPEG 切片用) + 选流偏好。
 pub use capture::UVC_ASSEMBLED_JPEG_DMA_OFF;

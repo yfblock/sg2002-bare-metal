@@ -1,7 +1,7 @@
 //! VS 流协商：`PROBE` → `GET_CUR` → `COMMIT` → `SET_INTERFACE`。
 
-use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
+use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
 use super::setup::{uvc_setup, UvcRequest};
@@ -24,7 +24,11 @@ fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT
     buf[4..8].copy_from_slice(&to_uvc_ticks(sel.frame_interval).to_le_bytes());
     let w = sel.frame_w.max(640) as u32;
     let h = sel.frame_h.max(480) as u32;
-    let est = if sel.is_mjpeg { w.saturating_mul(h) } else { w.saturating_mul(h).saturating_mul(2) };
+    let est = if sel.is_mjpeg {
+        w.saturating_mul(h)
+    } else {
+        w.saturating_mul(h).saturating_mul(2)
+    };
     buf[18..22].copy_from_slice(&est.to_le_bytes());
     let pkt_total = dwc2::wmax_payload_per_uframe(sel.mps_raw);
     buf[22..26].copy_from_slice(&pkt_total.to_le_bytes());
@@ -32,7 +36,9 @@ fn build_probe_commit_payload(sel: &UvcStreamSelection) -> [u8; UVC_PROBE_COMMIT
 }
 
 fn dump_probe(prefix: &str, p: &[u8]) {
-    if p.len() < 26 { return; }
+    if p.len() < 26 {
+        return;
+    }
     let bm_hint = u16::from_le_bytes([p[0], p[1]]);
     let fmt_ix = p[2];
     let frame_ix = p[3];
@@ -51,7 +57,10 @@ fn dump_probe(prefix: &str, p: &[u8]) {
 ///
 /// 协商后会更新 `sel.negotiated_payload_size`，并依据
 /// 协商出的 `dwMaxPayloadTransferSize` **重新选择最匹配的 alt setting**（避免 mps 切包错位）。
-pub(crate) fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelection) -> UsbResult<()> {
+pub(crate) fn uvc_start_video_stream(
+    ep: &dwc2::Ep0,
+    sel: &mut UvcStreamSelection,
+) -> UsbResult<()> {
     let _ = ep.set_interface(0, sel.vs_interface); // 尽力回 alt 0(忽略失败)
 
     let probe_init = build_probe_commit_payload(sel);
@@ -103,8 +112,11 @@ pub(crate) fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelectio
     // 按 3060 B 分包、主机只收 1020 B/uframe 会导致数据截断。
     let alt_mps = dwc2::wmax_payload_per_uframe(sel.mps_raw);
     if alt_mps > 0 && alt_mps < sel.negotiated_payload_size {
-        log::info!("UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
-            sel.negotiated_payload_size, alt_mps);
+        log::info!(
+            "UVC: clamping COMMIT dwMaxPayloadTransferSize {} -> {} to match alt bandwidth",
+            sel.negotiated_payload_size,
+            alt_mps
+        );
         sel.negotiated_payload_size = alt_mps;
         probe[22..26].copy_from_slice(&alt_mps.to_le_bytes());
     }
@@ -120,9 +132,13 @@ pub(crate) fn uvc_start_video_stream(ep: &dwc2::Ep0, sel: &mut UvcStreamSelectio
 
     ep.set_interface(sel.alt_setting, sel.vs_interface)?;
 
-    log::info!("UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
-        sel.vs_interface, sel.alt_setting, sel.negotiated_payload_size, negotiated_frame_size);
+    log::info!(
+        "UVC: streaming armed if={} alt={} negotiated_payload={} frame_size={}",
+        sel.vs_interface,
+        sel.alt_setting,
+        sel.negotiated_payload_size,
+        negotiated_frame_size
+    );
 
     Ok(())
 }
-

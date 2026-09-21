@@ -12,9 +12,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use super::JpuDecoder;
-use core::cell::SyncUnsafeCell;
 use crate::logger;
 use crate::platform::{JPU_POOL_PA, JPU_POOL_SIZE, YUV_BUF_PA, YUV_BUF_SIZE};
+use core::cell::SyncUnsafeCell;
 
 static DECODER: SyncUnsafeCell<Option<JpuDecoder>> = SyncUnsafeCell::new(None);
 
@@ -26,14 +26,7 @@ fn create_decoder() -> Result<JpuDecoder, &'static str> {
     // SAFETY: 小核 identity 映射（VA=PA），pool 在预留 rtos 区（普通 DRAM，JPU DMA
     // 可达，32 位地址不需 VD_REMAP）；JPU/TOP/VC 为物理 MMIO 基址，identity 下直访。
     // 输出固定 DMA 到共享 YUV 缓冲（YUV_BUF_PA，大核消费），CPU 不经 cache 读它。
-    unsafe {
-        JpuDecoder::new_with_pool(
-            JPU_POOL_PA,
-            JPU_POOL_SIZE,
-            YUV_BUF_PA,
-            YUV_BUF_SIZE,
-        )
-    }
+    unsafe { JpuDecoder::new_with_pool(JPU_POOL_PA, JPU_POOL_SIZE, YUV_BUF_PA, YUV_BUF_SIZE) }
 }
 
 /// 把 MJPEG 解码成 YUV 并 DMA 进共享 DRAM（固定 `YUV_BUF_PA` 缓冲）。

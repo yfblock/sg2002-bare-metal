@@ -7,9 +7,9 @@
 
 use core::time::Duration;
 
-use crate::drivers::usb::error::{UsbError, UsbResult};
-use crate::drivers::usb::dwc2;
 use crate::drivers::usb::device;
+use crate::drivers::usb::dwc2;
+use crate::drivers::usb::error::{UsbError, UsbResult};
 
 const USB_DT_ENDPOINT: u8 = 5;
 const CS_INTERFACE: u8 = 0x24;
@@ -89,7 +89,11 @@ fn choose_frame_interval(d: Desc, dflt_ival: u32, ival_type: u8, pref: u32) -> u
             Some(b) => {
                 let d_new = if v >= pref { v - pref } else { pref - v };
                 let d_old = if b >= pref { b - pref } else { pref - b };
-                if d_new < d_old { Some(v) } else { Some(b) }
+                if d_new < d_old {
+                    Some(v)
+                } else {
+                    Some(b)
+                }
             }
         }
     };
@@ -105,7 +109,9 @@ fn choose_frame_interval(d: Desc, dflt_ival: u32, ival_type: u8, pref: u32) -> u
         best = best_for(dflt_ival, best);
     } else {
         for k in 0..ival_type as usize {
-            let Some(ival) = d.u32le(26 + 4 * k) else { break };
+            let Some(ival) = d.u32le(26 + 4 * k) else {
+                break;
+            };
             best = best_for(ival, best);
         }
         best = best_for(dflt_ival, best);
@@ -162,9 +168,8 @@ impl<'a> Desc<'a> {
     }
 
     fn u16le(&self, off: usize) -> Option<u16> {
-        (off + 2 <= self.len).then(|| {
-            u16::from_le_bytes([self.buf[self.base + off], self.buf[self.base + off + 1]])
-        })
+        (off + 2 <= self.len)
+            .then(|| u16::from_le_bytes([self.buf[self.base + off], self.buf[self.base + off + 1]]))
     }
 
     fn u32le(&self, off: usize) -> Option<u32> {
@@ -215,18 +220,32 @@ fn parse_vs_frame(d: Desc, st: u8, fmt_ix: u8, pref_ticks: u32) -> Option<FrameP
     let mut min_ival = dflt_ival;
     if ival_type == 0 && d.len >= 38 {
         if let Some(dw_min) = d.u32le(26) {
-            if dw_min > 0 { min_ival = dw_min; }
+            if dw_min > 0 {
+                min_ival = dw_min;
+            }
         }
     } else if ival_type > 0 {
         for k in 0..ival_type as usize {
-            let Some(ival) = d.u32le(26 + 4 * k) else { break };
-            if ival > 0 && ival < min_ival { min_ival = ival; }
+            let Some(ival) = d.u32le(26 + 4 * k) else {
+                break;
+            };
+            if ival > 0 && ival < min_ival {
+                min_ival = ival;
+            }
         }
     }
     // dwFrameInterval 是 **100ns** 单位，故 fps = 1e7/iv，fps*100 = 1e9/iv。
     // 原来写的是 1e8/iv，所有帧率标注都小了 10 倍（"6.00 fps" 实为 60fps）。
-    let fps_x100 = if dflt_ival > 0 { 1_000_000_000_u32 / dflt_ival.max(1) } else { 0 };
-    let fps_min_x100 = if min_ival > 0 { 1_000_000_000_u32 / min_ival.max(1) } else { 0 };
+    let fps_x100 = if dflt_ival > 0 {
+        1_000_000_000_u32 / dflt_ival.max(1)
+    } else {
+        0
+    };
+    let fps_min_x100 = if min_ival > 0 {
+        1_000_000_000_u32 / min_ival.max(1)
+    } else {
+        0
+    };
     log::info!("UVC: VS-frame fmt_ix={fmt_ix} frame_ix={frame_ix} {w}x{h} iv_dflt={dflt_ival} ({}.{:02} fps) iv_min={min_ival} ({}.{:02} fps) ival_type={ival_type}",
         fps_x100 / 100, fps_x100 % 100,
         fps_min_x100 / 100, fps_min_x100 % 100);
@@ -234,24 +253,57 @@ fn parse_vs_frame(d: Desc, st: u8, fmt_ix: u8, pref_ticks: u32) -> Option<FrameP
     // "某个目标帧率到底可选不可选"（离散表只有一档时，任何偏好都是空操作）。
     if ival_type > 0 {
         for k in 0..ival_type as usize {
-            let Some(ival) = d.u32le(26 + 4 * k) else { break };
-            let fps = if ival > 0 { 1_000_000_000_u32 / ival } else { 0 };
-            log::info!("UVC:   ival[{}] = {} ({}.{:02} fps)", k, ival, fps / 100, fps % 100);
+            let Some(ival) = d.u32le(26 + 4 * k) else {
+                break;
+            };
+            let fps = if ival > 0 {
+                1_000_000_000_u32 / ival
+            } else {
+                0
+            };
+            log::info!(
+                "UVC:   ival[{}] = {} ({}.{:02} fps)",
+                k,
+                ival,
+                fps / 100,
+                fps % 100
+            );
         }
     } else if d.len >= 38 {
         let dw_min = d.u32le(26).unwrap_or(0);
         let dw_max = d.u32le(30).unwrap_or(0);
         let dw_step = d.u32le(34).unwrap_or(0);
-        let fmin = if dw_max > 0 { 1_000_000_000_u32 / dw_max } else { 0 };
-        let fmax = if dw_min > 0 { 1_000_000_000_u32 / dw_min } else { 0 };
+        let fmin = if dw_max > 0 {
+            1_000_000_000_u32 / dw_max
+        } else {
+            0
+        };
+        let fmax = if dw_min > 0 {
+            1_000_000_000_u32 / dw_min
+        } else {
+            0
+        };
         log::info!("UVC:   ival continuous: min={dw_min} max={dw_max} step={dw_step} => {}.{:02}..{}.{:02} fps",
             fmin / 100, fmin % 100, fmax / 100, fmax % 100);
     }
     // 选定本 frame 描述符实际使用的 interval：
     // 设了偏好 interval 时选最接近它的可用值；否则沿用最小（最高 fps）。
     let chosen_ival = choose_frame_interval(d, dflt_ival, ival_type, pref_ticks);
-    let ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
-    Some(FramePick { fmt_ix, frame_ix, w, h, ival, is_mjpeg: st == VS_FRAME_MJPEG })
+    let ival = if chosen_ival > 0 {
+        chosen_ival
+    } else if min_ival > 0 {
+        min_ival
+    } else {
+        dflt_ival
+    };
+    Some(FramePick {
+        fmt_ix,
+        frame_ix,
+        w,
+        h,
+        ival,
+        is_mjpeg: st == VS_FRAME_MJPEG,
+    })
 }
 
 /// 帧尺寸打分:与偏好精确一致得最高;否则 ≤ 偏好面积越接近越好、超出按
@@ -300,7 +352,10 @@ impl IsochCandidates {
                 None => tak,
                 Some(b) => {
                     if (mult == 1, payload)
-                        > (dwc2::wmax_mult(b.2) == 1, dwc2::wmax_payload_per_uframe(b.2))
+                        > (
+                            dwc2::wmax_mult(b.2) == 1,
+                            dwc2::wmax_payload_per_uframe(b.2),
+                        )
                     {
                         tak
                     } else {
@@ -317,7 +372,11 @@ impl IsochCandidates {
     }
 }
 
-pub(crate) fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) -> UsbResult<UvcStreamSelection> {
+pub(crate) fn parse_uvc_video_stream(
+    cfg: &[u8],
+    cfg_total: usize,
+    prefs: &UvcPrefs,
+) -> UsbResult<UvcStreamSelection> {
     let len = cfg_total.min(cfg.len());
     if len < 12 {
         return Err(UsbError::Protocol("cfg too short"));
@@ -334,13 +393,19 @@ pub(crate) fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPr
     let mut cur_ifc_num = 0u8;
     let mut cur_alt = 0u8;
 
-    let mut isoch = IsochCandidates { best: None, alts: [(0, 0); 8], count: 0 };
+    let mut isoch = IsochCandidates {
+        best: None,
+        alts: [(0, 0); 8],
+        count: 0,
+    };
     let mut mjpeg_pick: Option<FramePick> = None;
     let mut uncomp_pick: Option<FramePick> = None;
     let mut cur_fmt_ix = 0u8;
 
     while i + 2 <= len {
-        let Some(d) = Desc::new(cfg, i, len) else { break };
+        let Some(d) = Desc::new(cfg, i, len) else {
+            break;
+        };
         let ty = d.ty();
 
         if ty == device::USB_DT_INTERFACE && d.len >= 9 {
@@ -361,7 +426,11 @@ pub(crate) fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPr
                 }
             }
             if let Some(pick) = parse_vs_frame(d, st, cur_fmt_ix, pref_ticks) {
-                let beats = match if pick.is_mjpeg { &mjpeg_pick } else { &uncomp_pick } {
+                let beats = match if pick.is_mjpeg {
+                    &mjpeg_pick
+                } else {
+                    &uncomp_pick
+                } {
                     None => true,
                     Some(prev) => frame_rank(&pick, prefs) > frame_rank(prev, prefs),
                 };
@@ -460,9 +529,10 @@ pub(crate) fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
             Some(p) => p,
         });
     }
-    let (new_alt, new_mps_raw, new_total) = best_fit
-        .or(best_max)
-        .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
+    let (new_alt, new_mps_raw, new_total) =
+        best_fit
+            .or(best_max)
+            .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
     if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
         log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
             sel.alt_setting, sel.mps_raw,
@@ -491,7 +561,10 @@ pub struct UvcControlEntities {
 
 /// 解析配置描述符，找出 VideoControl 接口下的 CameraTerminal/ProcessingUnit 实体 ID
 /// 与各自的 `bmControls`，用于后续 SET_CUR 控制（自动白平衡 / 自动曝光等）。
-pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcControlEntities> {
+pub(crate) fn parse_uvc_control_entities(
+    cfg: &[u8],
+    cfg_total: usize,
+) -> Option<UvcControlEntities> {
     let len = cfg_total.min(cfg.len());
     if len < 12 {
         return None;
@@ -508,14 +581,17 @@ pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option
     let mut found_vc = false;
 
     while i + 2 <= len {
-        let Some(d) = Desc::new(cfg, i, len) else { break };
+        let Some(d) = Desc::new(cfg, i, len) else {
+            break;
+        };
         let ty = d.ty();
 
         if ty == device::USB_DT_INTERFACE && d.len >= 9 {
             cur_ifc_num = d.u8(2).unwrap_or(0);
             cur_ifc_class = d.u8(5).unwrap_or(cur_ifc_class);
             cur_ifc_sub = d.u8(6).unwrap_or(cur_ifc_sub);
-            if cur_ifc_class == device::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
+            if cur_ifc_class == device::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL
+            {
                 out.vc_interface = cur_ifc_num;
                 found_vc = true;
             }
@@ -569,5 +645,9 @@ pub(crate) fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option
         i += d.len;
     }
 
-    if found_vc { Some(out) } else { None }
+    if found_vc {
+        Some(out)
+    } else {
+        None
+    }
 }

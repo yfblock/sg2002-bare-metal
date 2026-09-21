@@ -9,7 +9,7 @@
 
 use core::time::Duration;
 
-use tock_registers::interfaces::{Readable, ReadWriteable};
+use tock_registers::interfaces::{ReadWriteable, Readable};
 
 use super::device::{enumerate_device, UsbDevice, DRIVERS};
 use super::dwc2::{self, regs::HPRT0};
@@ -254,23 +254,26 @@ impl Hub for DeviceHub<'_> {
     fn port_power(&self, port: u8) -> UsbResult<()> {
         // USB 2.0 §11.11.1：hub 上电后端口默认 PowerOff，必须显式
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
-        self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
-            port: port as u16,
-            feature: HUB_PORT_FEATURE_POWER,
-        }))
+        self.ep0
+            .write_no_data(hub_setup(HubRequest::SetPortFeature {
+                port: port as u16,
+                feature: HUB_PORT_FEATURE_POWER,
+            }))
     }
 
     fn port_status_w0(&self, port: u8) -> UsbResult<u16> {
         let mut buf = [0u8; 4];
-        self.ep0.read(hub_setup(HubRequest::GetPortStatus(port as u16)), &mut buf)?;
+        self.ep0
+            .read(hub_setup(HubRequest::GetPortStatus(port as u16)), &mut buf)?;
         Ok(u16::from_le_bytes([buf[0], buf[1]]))
     }
 
     fn reset_port(&self, port: u8) -> UsbResult<()> {
-        self.ep0.write_no_data(hub_setup(HubRequest::SetPortFeature {
-            port: port as u16,
-            feature: HUB_PORT_FEATURE_RESET,
-        }))?;
+        self.ep0
+            .write_no_data(hub_setup(HubRequest::SetPortFeature {
+                port: port as u16,
+                feature: HUB_PORT_FEATURE_RESET,
+            }))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
         crate::arch::time::delay(Duration::from_millis(100));
@@ -278,17 +281,19 @@ impl Hub for DeviceHub<'_> {
     }
 
     fn clear_connection_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
-            port: port as u16,
-            feature: HUB_PORT_FEATURE_C_CONNECTION,
-        }))
+        self.ep0
+            .write_no_data(hub_setup(HubRequest::ClearPortFeature {
+                port: port as u16,
+                feature: HUB_PORT_FEATURE_C_CONNECTION,
+            }))
     }
 
     fn clear_reset_change(&self, port: u8) -> UsbResult<()> {
-        self.ep0.write_no_data(hub_setup(HubRequest::ClearPortFeature {
-            port: port as u16,
-            feature: HUB_PORT_FEATURE_C_RESET,
-        }))
+        self.ep0
+            .write_no_data(hub_setup(HubRequest::ClearPortFeature {
+                port: port as u16,
+                feature: HUB_PORT_FEATURE_C_RESET,
+            }))
     }
 
     fn pwr_good(&self) -> Duration {
@@ -322,8 +327,6 @@ impl PortSpeed {
         }
     }
 }
-
-
 
 // ---- Hub 类 SETUP 构造（归本模块;与标准/UVC 构造同为纯函数）----
 
@@ -399,7 +402,9 @@ fn dispatch_device(dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
 /// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
 /// 上下文的硬错误)。
 pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
-    log::info!("[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
+    log::info!(
+        "[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
+    );
 
     root.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
     if !root.wait_connect(1, Duration::from_secs(5)) {
@@ -408,10 +413,12 @@ pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
         ));
     }
     let mut next_addr: u8 = 1;
-    let child = root.enumerate_child(1, &mut next_addr).map_err(|e| match e {
-        UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
-        e => e,
-    })?;
+    let child = root
+        .enumerate_child(1, &mut next_addr)
+        .map_err(|e| match e {
+            UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+            e => e,
+        })?;
     log::info!("[USB] bus: scan finished.");
     dispatch_device(child, &mut next_addr).map_err(|e| match e {
         UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),

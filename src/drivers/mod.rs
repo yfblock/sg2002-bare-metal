@@ -5,10 +5,10 @@
 //! (cache/延时等架构原语在 [`crate::arch`];UART 控制台含寄存器访问在
 //! [`crate::logger`]——单消费者,不设独立驱动层。)
 
-pub mod wdt;
-pub mod pinmux;
 pub mod gpio;
-pub mod mailbox;
-pub mod usb;
-pub mod jpu;
 pub mod ive;
+pub mod jpu;
+pub mod mailbox;
+pub mod pinmux;
+pub mod usb;
+pub mod wdt;

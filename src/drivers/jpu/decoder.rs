@@ -1,13 +1,13 @@
 //! JPU 硬件 JPEG 解码器（Baseline，轮询模式）。
 
-use super::header::{JpegHeaderInfo, parse_jpeg_header};
-use super::mem::{PhysBuffer, copy_to_phys, jpu_free};
+use super::header::{parse_jpeg_header, JpegHeaderInfo};
+use super::mem::{copy_to_phys, jpu_free, PhysBuffer};
 use super::regs::{
+    jpu_regs, wait_bbc_idle, FORMAT_224, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_444,
     HUFF_ADDR_MAX, HUFF_ADDR_PTR, HUFF_PHASE_MAX, HUFF_PHASE_MIN, HUFF_PHASE_PTR, HUFF_PHASE_VAL,
     MJPEG_BBC_STRM_CTRL, MJPEG_HUFF_CTRL, MJPEG_PIC_CTRL, MJPEG_PIC_SIZE, MJPEG_PIC_START,
-    MJPEG_PIC_STATUS, MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y,
-    STREAM_BUF_SIZE, VALUE32, jpu_regs, wait_bbc_idle,
-    FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444,
+    MJPEG_PIC_STATUS, MJPEG_QMAT_CTRL, QMAT_PHASE_CB, QMAT_PHASE_CR, QMAT_PHASE_Y, STREAM_BUF_SIZE,
+    VALUE32,
 };
 use crate::arch::cache::dcache_clean_range;
 use core::time::Duration;
@@ -49,17 +49,19 @@ impl JpuDecoder {
     ) -> Result<Self, &'static str> {
         let mut decoder = Self {
             stream_buf: PhysBuffer { addr: 0, size: 0 },
-            frame_buf: PhysBuffer { addr: out_pa, size: out_size },
+            frame_buf: PhysBuffer {
+                addr: out_pa,
+                size: out_size,
+            },
         };
         super::mem::init_jpu_memory_with(dma_pool_base, dma_pool_size);
         super::regs::hardware_init();
-        decoder.stream_buf = super::mem::jpu_alloc(STREAM_BUF_SIZE)
-            .ok_or("Failed to allocate stream buffer")?;
+        decoder.stream_buf =
+            super::mem::jpu_alloc(STREAM_BUF_SIZE).ok_or("Failed to allocate stream buffer")?;
         Ok(decoder)
     }
 
     pub fn decode(&mut self, jpeg_data: &[u8]) -> Result<DecodeResult, &'static str> {
-
         let header_info = parse_jpeg_header(jpeg_data)?;
 
         let copy_len = jpeg_data.len().min(self.stream_buf.size);
@@ -72,17 +74,16 @@ impl JpuDecoder {
         if frame_size > self.frame_buf.size {
             log::warn!(
                 "[JPU] output buf too small: frame_size={} out.size={} {}x{} fmt={}",
-                frame_size, self.frame_buf.size, header_info.width, header_info.height, header_info.format
+                frame_size,
+                self.frame_buf.size,
+                header_info.width,
+                header_info.height,
+                header_info.format
             );
             return Err("output buffer too small");
         }
 
-        configure_stream_regs(
-            &self.stream_buf,
-            copy_len,
-            &header_info,
-            layout,
-        );
+        configure_stream_regs(&self.stream_buf, copy_len, &header_info, layout);
 
         upload_huff_tables(&header_info)?;
         upload_quant_tables(&header_info)?;
@@ -166,7 +167,12 @@ fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'stati
     // 两者均由 SOF 采样因子直接推导,与厂商驱动真值表逐字节一致,不再按格式查表。
     let mut comp_info = 0u32;
     let mut mcu_block_num = 0u32;
-    for (i, &(h, v)) in header.sampling.iter().enumerate().take(header.num_components as usize) {
+    for (i, &(h, v)) in header
+        .sampling
+        .iter()
+        .enumerate()
+        .take(header.num_components as usize)
+    {
         comp_info |= ((h as u32) << 2 | v as u32) << (8 - 4 * i);
         mcu_block_num += h as u32 * v as u32;
     }
@@ -193,7 +199,8 @@ fn frame_layout(header: &JpegHeaderInfo) -> Result<(usize, FrameLayout), &'stati
     ))
 }
 
-fn configure_stream_regs(stream_buf: &PhysBuffer,
+fn configure_stream_regs(
+    stream_buf: &PhysBuffer,
     copy_len: usize,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
@@ -235,9 +242,13 @@ fn configure_stream_regs(stream_buf: &PhysBuffer,
             + MJPEG_PIC_SIZE::HEIGHT.val(layout.aligned_height),
     );
     jpu.rot_info.write(VALUE32::VAL.val(0));
-    jpu.mcu_info.write(VALUE32::VAL.val((layout.mcu_block_num << 16) | (header.num_components << 12) | layout.comp_info));
+    jpu.mcu_info.write(
+        VALUE32::VAL
+            .val((layout.mcu_block_num << 16) | (header.num_components << 12) | layout.comp_info),
+    );
     jpu.dpb_config.write(VALUE32::VAL.val(0));
-    jpu.rst_intval.write(VALUE32::VAL.val(header.restart_interval));
+    jpu.rst_intval
+        .write(VALUE32::VAL.val(header.restart_interval));
     jpu.scl_info.write(VALUE32::VAL.val(0));
     jpu.op_info.write(VALUE32::VAL.val(layout.bus_req_num));
 }
@@ -251,7 +262,8 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].min_codes[j];
             let temp = sign_extend_16(huff_data);
-            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
+            jpu.huff_data
+                .write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
 
@@ -262,7 +274,8 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].max_codes[j];
             let temp = sign_extend_16(huff_data);
-            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
+            jpu.huff_data
+                .write(VALUE32::VAL.val(((temp & 0xFFFF) << 16) | huff_data));
         }
     }
 
@@ -273,7 +286,8 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
         for j in 0..16 {
             let huff_data = header.huff_tables[table_idx].ptrs[j] as u32;
             let temp = sign_extend_8(huff_data);
-            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | huff_data));
+            jpu.huff_data
+                .write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | huff_data));
         }
     }
 
@@ -291,7 +305,8 @@ fn upload_huff_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
         for j in 0..count.min(header.huff_tables[table_idx].num_values) {
             let val = header.huff_tables[table_idx].values[j] as u32;
             let temp = sign_extend_8(val);
-            jpu.huff_data.write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | val));
+            jpu.huff_data
+                .write(VALUE32::VAL.val(((temp & 0xFFFFFF) << 8) | val));
         }
         for _ in count..max_count {
             jpu.huff_data.write(VALUE32::VAL.val(0xFFFF_FFFF));
@@ -336,7 +351,8 @@ fn upload_quant_tables(header: &JpegHeaderInfo) -> Result<(), &'static str> {
 
         jpu.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(phase));
         for j in 0..64 {
-            jpu.qmat_data.write(VALUE32::VAL.val(header.quant_tables[table_idx].values[j] as u32));
+            jpu.qmat_data
+                .write(VALUE32::VAL.val(header.quant_tables[table_idx].values[j] as u32));
         }
         jpu.qmat_ctrl.write(MJPEG_QMAT_CTRL::PHASE.val(0));
     }
@@ -360,14 +376,17 @@ fn gram_setup(stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'stati
     for i in 0..2 {
         let cur_page = page_ptr + i;
         jpu.bbc_cur_pos.write(VALUE32::VAL.val(cur_page as u32));
-        jpu.bbc_ext_addr.write(VALUE32::VAL.val((stream_phys as u32) + ((cur_page as u32) << 8)));
-        jpu.bbc_int_addr.write(VALUE32::VAL.val(((cur_page & 1) as u32) << 6));
+        jpu.bbc_ext_addr
+            .write(VALUE32::VAL.val((stream_phys as u32) + ((cur_page as u32) << 8)));
+        jpu.bbc_int_addr
+            .write(VALUE32::VAL.val(((cur_page & 1) as u32) << 6));
         jpu.bbc_data_cnt.write(VALUE32::VAL.val(256 / 4));
         jpu.bbc_command.write(VALUE32::VAL.val(0));
         wait_bbc_idle();
     }
 
-    jpu.bbc_cur_pos.write(VALUE32::VAL.val((page_ptr + 2) as u32));
+    jpu.bbc_cur_pos
+        .write(VALUE32::VAL.val((page_ptr + 2) as u32));
     jpu.bbc_ctrl.write(VALUE32::VAL.val(1));
 
     jpu.gbu_wd_ptr.write(VALUE32::VAL.val(word_ptr as u32));
@@ -387,7 +406,8 @@ fn gram_setup(stream_phys: usize, header: &JpegHeaderInfo) -> Result<(), &'stati
     Ok(())
 }
 
-fn start_decode(frame_phys: usize,
+fn start_decode(
+    frame_phys: usize,
     header: &JpegHeaderInfo,
     layout: FrameLayout,
 ) -> Result<(), &'static str> {
@@ -413,7 +433,8 @@ fn start_decode(frame_phys: usize,
     jpu.clp_info.write(VALUE32::VAL.val(0));
 
     // W1C:写 1 清 DONE/ERROR,清上一帧残留状态再启动
-    jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
+    jpu.pic_status
+        .write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
     jpu.pic_start.write(MJPEG_PIC_START::START_PIC::SET);
     Ok(())
 }
@@ -434,20 +455,18 @@ fn poll_decode_done() -> Result<(), &'static str> {
     loop {
         if jpu.pic_status.is_set(MJPEG_PIC_STATUS::DONE) {
             // W1C:写 1 清 DONE/ERROR
-            jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
+            jpu.pic_status
+                .write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
             return Ok(());
         }
 
         if jpu.pic_status.is_set(MJPEG_PIC_STATUS::ERROR) {
             let status = jpu.pic_status.get();
             let err_mb = jpu.pic_errmb.get();
-            log::warn!(
-                "[JPU] Error! status=0x{:x}, err_mb=0x{:x}",
-                status,
-                err_mb
-            );
+            log::warn!("[JPU] Error! status=0x{:x}, err_mb=0x{:x}", status, err_mb);
             // W1C:写 1 清 DONE/ERROR
-            jpu.pic_status.write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
+            jpu.pic_status
+                .write(MJPEG_PIC_STATUS::DONE::SET + MJPEG_PIC_STATUS::ERROR::SET);
             return Err("JPU decode error");
         }
 

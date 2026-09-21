@@ -13,16 +13,16 @@
 //! - [`control`]：EP0 控制传输（标准请求 + Hub 端口请求包装）。
 //! - [`isoch`]：等时 IN 端点（`IsochInEp`，下一微帧调度，高带宽 mult 支持）。
 
-pub mod regs;
-pub mod controller;
-pub mod cv182x;
 pub mod channel;
 pub mod control;
+pub mod controller;
+pub mod cv182x;
 pub mod dma;
 pub mod isoch;
+pub mod regs;
 
-pub use controller::{dwc2_host_init, hprt0_port, port_reset_pulse};
 pub use channel::{handle_usb_irq, take_usb_isr_count};
 pub use control::Ep0;
+pub use controller::{dwc2_host_init, hprt0_port, port_reset_pulse};
 pub use dma::{dma_rx_slice, dma_write_at, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 pub use isoch::{wmax_mps, wmax_mult, wmax_payload_per_uframe, IsochInEp};

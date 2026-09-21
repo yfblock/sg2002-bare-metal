@@ -34,17 +34,17 @@
 #![no_main]
 
 mod arch;
-mod yuv_buf;
+mod drivers;
+mod ipc;
 mod logger;
 mod panic;
-mod ipc;
 mod platform;
-mod drivers;
+mod yuv_buf;
 
 use core::time::Duration;
 
-use crate::drivers::usb::{dwc2, uvc};
 use crate::drivers::usb::hub::{enumerate_bus, RootHub};
+use crate::drivers::usb::{dwc2, uvc};
 
 const FPS_REPORT_EVERY: u32 = 100;
 
@@ -63,7 +63,10 @@ pub(crate) extern "C" fn rust_main() -> ! {
     let cam = enumerate_bus(&RootHub).expect("enum");
     logger::print_fmt(format_args!(
         "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
-        cam.vid, cam.pid, cam.ep0.dev(), cam.speed.as_str()
+        cam.vid,
+        cam.pid,
+        cam.ep0.dev(),
+        cam.speed.as_str()
     ));
     let prefs = uvc::UvcPrefs {
         frame_w: 640,
@@ -103,16 +106,14 @@ fn pipeline_loop(camera: &uvc::UvcCamera) -> ! {
                     report_fps(frames, &mut fps_mark_frame, &mut fps_mark_time);
                 }
             }
-            Err(_) => {
-            }
+            Err(_) => {}
         }
     }
 }
 
 /// YUV 缺失时的兜底通知:只上行 MJPEG 本身(dims 按协商几何 640×480 编码)。
 fn notify_mjpeg_only(frame_count: u32, jpeg_len: usize) {
-    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
-        | ipc::encode_dims(640, 480);
+    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI | ipc::encode_dims(640, 480);
     ipc::notify(frame_count, jpeg_len as u32, flags);
 }
 
@@ -137,9 +138,7 @@ fn decode_and_notify(jpeg_len: usize, frames: u32) {
     if let Err(_e) = crate::drivers::ive::csc(&yuv, &rgb, w, h) {}
 
     let reported = len.min(platform::YUV_BUF_SIZE);
-    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI
-        | ipc::FLAG_YUV_READY
-        | ipc::encode_dims(w, h);
+    let flags = ipc::FLAG_SOI | ipc::FLAG_EOI | ipc::FLAG_YUV_READY | ipc::encode_dims(w, h);
     ipc::notify(frames, reported as u32, flags);
 }
 
@@ -150,7 +149,9 @@ fn report_fps(frames: u32, fps_mark_frame: &mut u32, fps_mark_time: &mut u64) {
     let n = frames.wrapping_sub(*fps_mark_frame) as u64;
     let fps_x100 = if dt > 0 {
         n * crate::arch::time::TIMEBASE_HZ * 100 / dt
-    } else { 0 };
+    } else {
+        0
+    };
     logger::print_fmt(format_args!(
         "[FPS] frames={} fps={}.{:02} usbisr={} jpu_err={}\n",
         frames,

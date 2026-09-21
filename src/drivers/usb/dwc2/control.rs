@@ -4,10 +4,10 @@
 use super::channel::Channel;
 use super::dma::{dma_ptr, dma_rx_slice, DMA_OFF_SMALL_IO, OFF_EP0};
 use super::regs::{HCCHAR, HCTSIZ};
-use tock_registers::fields::FieldValue;
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::setup::{std_setup, StdRequest};
+use tock_registers::fields::FieldValue;
 
 /// EP0 控制端点句柄：把控制传输的公共前置参数（设备地址、EP0 最大包长）
 /// 绑定为端点自身状态。
@@ -112,34 +112,33 @@ impl Ep0 {
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
         let ep0 = Ep0 { dev: 0, mps: 64 };
-        unsafe {
-            // wLength = 18:设备描述符规范全长。
-            let w_length: u16 = 18;
-            ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
+        // wLength = 18:设备描述符规范全长。
+        let w_length: u16 = 18;
+        ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
 
+        unsafe {
             Channel::CONTROL.xfer(
                 ep0.hcchar(true),
                 HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(w_length as u32),
                 OFF_EP0 as u32,
             )?;
-            cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, w_length as usize);
-
-            let descriptor = DeviceDescriptor::new(
-                dma_rx_slice(OFF_EP0, w_length as usize)
-                    .ok_or(UsbError::Hardware("dma view"))?,
-            )
-            .ok_or(UsbError::Protocol("short descriptor"))?;
-            let ep0_max_packet_size = normalize_ep0_mps(descriptor.max_packet_size0());
-
-            ep0.status_stage(false)?;
-
-            Ok((
-                descriptor.vendor_id(),
-                descriptor.product_id(),
-                ep0_max_packet_size,
-                descriptor.device_class(),
-            ))
         }
+        cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, w_length as usize);
+
+        let descriptor = DeviceDescriptor::new(
+            dma_rx_slice(OFF_EP0, w_length as usize).ok_or(UsbError::Hardware("dma view"))?,
+        )
+        .ok_or(UsbError::Protocol("short descriptor"))?;
+        let ep0_max_packet_size = normalize_ep0_mps(descriptor.max_packet_size0());
+
+        ep0.status_stage(false)?;
+
+        Ok((
+            descriptor.vendor_id(),
+            descriptor.product_id(),
+            ep0_max_packet_size,
+            descriptor.device_class(),
+        ))
     }
 
     /// 在默认地址 0 上发送 `SET_ADDRESS`（须在 [`Ep0::new`] 建立句柄之前）。
@@ -173,7 +172,10 @@ impl Ep0 {
         const USB_DT_CONFIGURATION: u8 = 2;
         let mut hdr = [0u8; 9];
         self.read(
-            std_setup(StdRequest::GetDescriptorConfiguration { cfg_index, w_length: 9 }),
+            std_setup(StdRequest::GetDescriptorConfiguration {
+                cfg_index,
+                w_length: 9,
+            }),
             &mut hdr,
         )?;
         if hdr[1] != USB_DT_CONFIGURATION {
@@ -181,7 +183,9 @@ impl Ep0 {
         }
         let total = u16::from_le_bytes([hdr[2], hdr[3]]) as usize;
         if total > 4096 {
-            return Err(UsbError::Protocol("configuration descriptor too large (>4096)"));
+            return Err(UsbError::Protocol(
+                "configuration descriptor too large (>4096)",
+            ));
         }
         let mut buf = [0u8; 4096];
         self.read(
@@ -213,7 +217,7 @@ impl Ep0 {
         }
         self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(true); // IN 数据段:管道方向恒定,循环外组装
-        // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
+                                    // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
         let mut data1 = true;
         for out_chunk in out.chunks_mut(self.mps as usize) {
             let pid = if data1 {
@@ -250,7 +254,7 @@ impl Ep0 {
         }
         self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(false); // OUT 数据段:管道方向恒定,循环外组装
-        // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
+                                     // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
         let mut data1 = true;
         for chunk in data.chunks(self.mps as usize) {
             let pid = if data1 {
@@ -284,4 +288,3 @@ fn normalize_ep0_mps(b: u8) -> u32 {
         _ => 8,
     }
 }
-

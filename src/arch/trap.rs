@@ -20,7 +20,10 @@ extern "C" {
 /// 仅安装 trap 向量（Direct 模式）。在一切初始化**之前**调用，保证任何异常
 /// 都有入口可去（fault 打印依赖 UART 已被 U-Boot 配好，可用）。
 pub unsafe fn init_mtvec() {
-    mtvec::write(Mtvec::new(_trap_entry as *const () as usize, mtvec::TrapMode::Direct));
+    mtvec::write(Mtvec::new(
+        _trap_entry as *const () as usize,
+        mtvec::TrapMode::Direct,
+    ));
 }
 
 /// 完整中断初始化：初始化 PLIC + 开启外部中断 + 启动 mtimer 心跳
@@ -65,7 +68,10 @@ extern "C" fn rust_trap_handler(mcause: Mcause, cur_sp: usize) -> usize {
             let _lk = logger::line_lock_try();
             logger::print_fmt_nolock(format_args!(
                 "\n!!! C906L FAULT: mcause={:#x} mepc={:#x} mtval={:#x} !!!\n",
-                mcause.bits() as u64, mepc as u64, mtval as u64));
+                mcause.bits() as u64,
+                mepc as u64,
+                mtval as u64
+            ));
             if _lk {
                 logger::line_unlock();
             }

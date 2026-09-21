@@ -5,9 +5,9 @@
 //! 本模块统一「端口后面的设备是什么、谁接管」。
 
 use super::dwc2::Ep0;
-use super::setup::{std_setup, StdRequest};
 use super::error::{UsbError, UsbResult};
 use super::hub::PortSpeed;
+use super::setup::{std_setup, StdRequest};
 
 /// QEMU 默认 `usb-hub`（插在根口与外设之间）VID/PID。
 const QEMU_USB_HUB_VID: u16 = 0x0409;
@@ -74,7 +74,10 @@ pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResul
 fn first_interface_class(ep: &Ep0) -> UsbResult<u8> {
     let mut buf = [0u8; 64];
     ep.read(
-        std_setup(StdRequest::GetDescriptorConfiguration { cfg_index: 0, w_length: 64 }),
+        std_setup(StdRequest::GetDescriptorConfiguration {
+            cfg_index: 0,
+            w_length: 64,
+        }),
         &mut buf,
     )?;
     let mut i: usize = 0;

@@ -1,9 +1,9 @@
 //! Isoch IN 抓帧与帧组装：按 FID 翻转/EOF 判帧界，MJPEG 负载按 SOI/EOI 校验；
 //! 含微帧级调试 trace。
 
-use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::dwc2::{DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
+use crate::drivers::usb::error::{UsbError, UsbResult};
 
 use super::session::UvcCamera;
 
@@ -65,14 +65,23 @@ fn process_packet(
             }
             // FID 翻转 = 新帧开始：转入 Capturing，本包按 Capturing 继续处理。
             Some(prev) if prev != cur_fid => {
-                *state = FrameState::Capturing { frame_fid: cur_fid, saw_data: false };
+                *state = FrameState::Capturing {
+                    frame_fid: cur_fid,
+                    saw_data: false,
+                };
             }
             _ => return Ok(false),
         }
     }
     process_packet_capturing(
         state,
-        CapturingPacket { payload, eof, cur_fid, jpeg_len, jpeg_cap },
+        CapturingPacket {
+            payload,
+            eof,
+            cur_fid,
+            jpeg_len,
+            jpeg_cap,
+        },
     )
 }
 
@@ -86,7 +95,11 @@ fn tail_is_eoi(len: usize) -> bool {
 
 /// Capturing 状态的单包 MJPEG 帧组装；仅由 [`process_packet`] 在确认状态后调用。
 fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> UsbResult<bool> {
-    let FrameState::Capturing { frame_fid, saw_data } = state else {
+    let FrameState::Capturing {
+        frame_fid,
+        saw_data,
+    } = state
+    else {
         unreachable!()
     };
     if p.cur_fid != *frame_fid {
@@ -110,7 +123,11 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
         if !*saw_data && (p.payload.len() < 2 || p.payload[0] != 0xff || p.payload[1] != 0xd8) {
             return Ok(false);
         }
-        if p.jpeg_len.checked_add(p.payload.len()).unwrap_or(usize::MAX) > p.jpeg_cap {
+        if p.jpeg_len
+            .checked_add(p.payload.len())
+            .unwrap_or(usize::MAX)
+            > p.jpeg_cap
+        {
             return Err(UsbError::Hardware("video assemble overflow"));
         }
         dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *p.jpeg_len, p.payload)?;
@@ -127,7 +144,9 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
         // 不返回 false 让 caller 误以为"还在累积"——直接置 state 回 wait 让下一帧从干净状态开始。
         *p.jpeg_len = 0;
         *saw_data = false;
-        *state = FrameState::WaitFirstSwitch { last_fid: Some(p.cur_fid) };
+        *state = FrameState::WaitFirstSwitch {
+            last_fid: Some(p.cur_fid),
+        };
         return Ok(false);
     }
     Ok(false)
@@ -149,7 +168,11 @@ impl UvcCamera {
         let work_off = DMA_OFF_UVC_BULK;
         let prev_eof_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
         let mut state = FrameState::WaitFirstSwitch {
-            last_fid: if prev_eof_fid <= 1 { Some(prev_eof_fid) } else { None },
+            last_fid: if prev_eof_fid <= 1 {
+                Some(prev_eof_fid)
+            } else {
+                None
+            },
         };
         const MAX_UFRAMES: u32 = 80_000;
         for _ in 0..MAX_UFRAMES {
@@ -159,7 +182,8 @@ impl UvcCamera {
                 continue;
             }
             data_transfers = data_transfers.wrapping_add(1);
-            let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
+            let slice =
+                dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
             let eof = if mult == 1 {
                 process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap)?
@@ -168,7 +192,11 @@ impl UvcCamera {
                 let mut hit_eof = false;
                 let mut off = 0usize;
                 while off < slice.len() {
-                    let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
+                    let end = if slice.len() - off >= mps_low {
+                        off + mps_low
+                    } else {
+                        slice.len()
+                    };
                     let pkt = &slice[off..end];
                     off = end;
                     if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
@@ -185,8 +213,13 @@ impl UvcCamera {
                 return Ok(jpeg_len);
             }
         }
-        log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
-            transfers, data_transfers, jpeg_len, mult);
+        log::info!(
+            "UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
+            transfers,
+            data_transfers,
+            jpeg_len,
+            mult
+        );
         Err(UsbError::Timeout)
     }
 }

@@ -9,8 +9,8 @@
 //! [`crate::arch::trap`] 分发到本模块的 [`handle_mailbox_irq`]。
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use tock_registers::register_structs;
 use tock_registers::interfaces::{Readable, Writeable};
+use tock_registers::register_structs;
 use tock_registers::registers::ReadWrite;
 
 use crate::drivers::mailbox as hw;
@@ -68,10 +68,7 @@ pub fn encode_dims(w: u32, h: u32) -> u32 {
 /// 也挤回了 DRAM；一旦去掉那两次 invalidate，大核就只能读到全 0。
 #[inline]
 fn flush_mailbox() {
-    crate::arch::cache::dcache_clean_range(
-        MAILBOX_PA,
-        core::mem::size_of::<MailboxRegs>(),
-    );
+    crate::arch::cache::dcache_clean_range(MAILBOX_PA, core::mem::size_of::<MailboxRegs>());
 }
 
 /// 整结构写入邮箱（启动存活标记 / panic 标记用；帧信息走 [`notify`]）。

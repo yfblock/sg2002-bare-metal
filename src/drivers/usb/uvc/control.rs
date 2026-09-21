@@ -2,8 +2,8 @@
 //! CameraTerminal（自动曝光/聚焦）。按 `bmControls` 逐项决定是否发送；
 //! 不支持就跳过，STALL 只记日志、不致命。
 
-use crate::drivers::usb::error::UsbResult;
 use crate::drivers::usb::dwc2;
+use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::UvcControlEntities;
 use super::setup::{uvc_setup, UvcRequest};
@@ -28,25 +28,24 @@ const CT_AE_PRIORITY_CONTROL: u8 = 0x03;
 const CT_FOCUS_AUTO_CONTROL: u8 = 0x08;
 
 /// 控制传输出现**任何**错误（含 STALL）都返回 false，调用方按“不支持”降级/忽略。
-fn try_set_cur_u8(
-    ep: &dwc2::Ep0,
-    vc_if: u8,
-    entity: u8,
-    selector: u8,
-    value: u8,
-) -> bool {
-    let setup = uvc_setup(UvcRequest::SetCurControl { interface: vc_if, entity_id: entity, selector, w_length: 1 });
+fn try_set_cur_u8(ep: &dwc2::Ep0, vc_if: u8, entity: u8, selector: u8, value: u8) -> bool {
+    let setup = uvc_setup(UvcRequest::SetCurControl {
+        interface: vc_if,
+        entity_id: entity,
+        selector,
+        w_length: 1,
+    });
     let buf = [value];
     ep.write(setup, &buf).is_ok()
 }
 
-fn try_get_cur_u16(
-    ep: &dwc2::Ep0,
-    vc_if: u8,
-    entity: u8,
-    selector: u8,
-) -> Option<u16> {
-    let setup = uvc_setup(UvcRequest::GetCurControl { interface: vc_if, entity_id: entity, selector, w_length: 2 });
+fn try_get_cur_u16(ep: &dwc2::Ep0, vc_if: u8, entity: u8, selector: u8) -> Option<u16> {
+    let setup = uvc_setup(UvcRequest::GetCurControl {
+        interface: vc_if,
+        entity_id: entity,
+        selector,
+        w_length: 2,
+    });
     let mut buf = [0u8; 2];
     if ep.read(setup, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
@@ -55,13 +54,13 @@ fn try_get_cur_u16(
     }
 }
 
-fn try_get_def_u16(
-    ep: &dwc2::Ep0,
-    vc_if: u8,
-    entity: u8,
-    selector: u8,
-) -> Option<u16> {
-    let setup = uvc_setup(UvcRequest::GetDefControl { interface: vc_if, entity_id: entity, selector, w_length: 2 });
+fn try_get_def_u16(ep: &dwc2::Ep0, vc_if: u8, entity: u8, selector: u8) -> Option<u16> {
+    let setup = uvc_setup(UvcRequest::GetDefControl {
+        interface: vc_if,
+        entity_id: entity,
+        selector,
+        w_length: 2,
+    });
     let mut buf = [0u8; 2];
     if ep.read(setup, &mut buf).is_ok() {
         Some(u16::from_le_bytes(buf))
@@ -70,14 +69,13 @@ fn try_get_def_u16(
     }
 }
 
-fn try_set_cur_u16(
-    ep: &dwc2::Ep0,
-    vc_if: u8,
-    entity: u8,
-    selector: u8,
-    value: u16,
-) -> bool {
-    let setup = uvc_setup(UvcRequest::SetCurControl { interface: vc_if, entity_id: entity, selector, w_length: 2 });
+fn try_set_cur_u16(ep: &dwc2::Ep0, vc_if: u8, entity: u8, selector: u8, value: u16) -> bool {
+    let setup = uvc_setup(UvcRequest::SetCurControl {
+        interface: vc_if,
+        entity_id: entity,
+        selector,
+        w_length: 2,
+    });
     let buf = value.to_le_bytes();
     ep.write(setup, &buf).is_ok()
 }
@@ -116,10 +114,7 @@ fn pu_apply_one(ep: &dwc2::Ep0, vc_if: u8, pu: u8, bm: u32, ctrl: PuCtrl) {
 ///
 /// `0c45:64ab` 等 SunplusIT/Sonix 摄像头出厂在某些场景下默认白平衡是手动模式，
 /// 这是图像偏色（偏蓝/偏紫）的最常见原因。
-pub(crate) fn uvc_init_camera_controls(
-    ep: &dwc2::Ep0,
-    ent: &UvcControlEntities,
-) -> UsbResult<()> {
+pub(crate) fn uvc_init_camera_controls(ep: &dwc2::Ep0, ent: &UvcControlEntities) -> UsbResult<()> {
     log::info!(
         "UVC: VC if={} CT={:?} (bm={:#010x}) PU={:?} (bm={:#010x})",
         ent.vc_interface,
@@ -138,29 +133,113 @@ pub(crate) fn uvc_init_camera_controls(
         //   D0=Brightness D1=Contrast D2=Hue D3=Saturation D4=Sharpness
         //   D5=Gamma D6=WB Temp D8=Backlight D9=Gain D10=PowerLineFreq
         //   D11=Hue Auto D12=WB Temp Auto
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 0, selector: PU_BRIGHTNESS_CONTROL, name: "Brightness" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 1, selector: PU_CONTRAST_CONTROL, name: "Contrast" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 2, selector: PU_HUE_CONTROL, name: "Hue" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 3, selector: PU_SATURATION_CONTROL, name: "Saturation" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 4, selector: PU_SHARPNESS_CONTROL, name: "Sharpness" });
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 0,
+                selector: PU_BRIGHTNESS_CONTROL,
+                name: "Brightness",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 1,
+                selector: PU_CONTRAST_CONTROL,
+                name: "Contrast",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 2,
+                selector: PU_HUE_CONTROL,
+                name: "Hue",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 3,
+                selector: PU_SATURATION_CONTROL,
+                name: "Saturation",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 4,
+                selector: PU_SHARPNESS_CONTROL,
+                name: "Sharpness",
+            },
+        );
         // PU_GAMMA selector = 0x09
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 5, selector: PU_GAMMA_CONTROL, name: "Gamma" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 8, selector: PU_BACKLIGHT_COMPENSATION, name: "Backlight" });
-        pu_apply_one(ep, vc_if, pu, bm, PuCtrl { bit: 9, selector: PU_GAIN_CONTROL, name: "Gain" });
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 5,
+                selector: PU_GAMMA_CONTROL,
+                name: "Gamma",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 8,
+                selector: PU_BACKLIGHT_COMPENSATION,
+                name: "Backlight",
+            },
+        );
+        pu_apply_one(
+            ep,
+            vc_if,
+            pu,
+            bm,
+            PuCtrl {
+                bit: 9,
+                selector: PU_GAIN_CONTROL,
+                name: "Gain",
+            },
+        );
 
         // ② 白平衡：默认走 Auto WB（若支持 D12）
         if (bm & (1 << 12)) != 0 {
             let _ = try_set_cur_u8(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 0);
             if (bm & (1 << 6)) != 0 {
-                if let Some(d) = try_get_def_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL) {
+                if let Some(d) =
+                    try_get_def_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL)
+                {
                     let _ = try_set_cur_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, d);
                 }
             }
             let _ = try_set_cur_u8(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_AUTO_CONTROL, 1);
-            let cur_t = try_get_cur_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(0);
+            let cur_t =
+                try_get_cur_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(0);
             log::info!("UVC: PU.WB = Auto (cur {cur_t}K)");
         } else if (bm & (1 << 6)) != 0 {
-            let val = try_get_def_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL).unwrap_or(4500);
+            let val = try_get_def_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL)
+                .unwrap_or(4500);
             let _ = try_set_cur_u16(ep, vc_if, pu, PU_WHITE_BALANCE_TEMPERATURE_CONTROL, val);
             log::info!("UVC: PU.WB = {val}K (no-auto)");
         }

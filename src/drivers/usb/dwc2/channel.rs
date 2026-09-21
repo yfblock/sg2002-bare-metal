@@ -131,7 +131,12 @@ impl Channel {
     /// DMA 地址(fence 前后)→ 写 HCENA 启动。`hctsiz` 为 HCTSIZ 字段组合
     /// (PID+PKTCNT+XFERSIZE),`hcchar_ena` 须已含 `CHENA`(等时通道再加
     /// `ODDFRM`)。返回 DMA 物理地址(供错误日志)。MMIO 写序勿调整。
-    pub(crate) fn arm(&self, hctsiz: FieldValue<u32, HCTSIZ::Register>, hcchar_ena: u32, dma_off: u32) -> UsbResult<u32> {
+    pub(crate) fn arm(
+        &self,
+        hctsiz: FieldValue<u32, HCTSIZ::Register>,
+        hcchar_ena: u32,
+        dma_off: u32,
+    ) -> UsbResult<u32> {
         let chan = self.chan_regs();
         // 窗口偏移 → HCDMA 总线地址:identity 映射(VA=PA),缓冲在
         // rtos_region(≤0x90000000),低 32 位截断即总线地址。
@@ -140,7 +145,8 @@ impl Channel {
         // wait_disabled 已保证 CHENA 自清（通道停止），无需再发 CHDIS halt。
         chan.hcsplt.set(0);
         chan.hcint.set(HCINT_ALL_W1C);
-        chan.hcintmsk.set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
+        chan.hcintmsk
+            .set((HCINT::CHHLTD::SET + HCINT::XFERCOMPL::SET).value);
         chan.hctsiz.set(hctsiz.value);
         usb_bus_fence_before_dma();
         chan.hcdma.set(dmap);

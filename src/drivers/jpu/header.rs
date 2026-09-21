@@ -7,7 +7,7 @@
 //! - DHT 表：Tc/Th 字节 + 16 字节码长计数 + 值序列
 //! - DQT 表：Pq/Tq 字节 + 64 项系数（8-bit 或 16-bit）
 
-use super::regs::{FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_224, FORMAT_444};
+use super::regs::{FORMAT_224, FORMAT_400, FORMAT_420, FORMAT_422, FORMAT_444};
 
 const MARKER_SIZE: usize = 2;
 /// 段长度字段在 i+2 起,大端 u16
@@ -234,7 +234,12 @@ impl JpegHeaderInfo {
             dc_huff_tbl: [0; NUM_JPEG_COMPS],
             ac_huff_tbl: [0; NUM_JPEG_COMPS],
             quant_tbl: [0; NUM_JPEG_COMPS],
-            huff_tables: [HuffTable::new(), HuffTable::new(), HuffTable::new(), HuffTable::new()],
+            huff_tables: [
+                HuffTable::new(),
+                HuffTable::new(),
+                HuffTable::new(),
+                HuffTable::new(),
+            ],
             quant_tables: [
                 QuantTable::new(),
                 QuantTable::new(),
@@ -319,7 +324,12 @@ pub fn parse_jpeg_header(data: &[u8]) -> Result<JpegHeaderInfo, &'static str> {
                     i += 1;
                     continue;
                 };
-                parse_dht(data, i + MARKER_SIZE + SEG_LENGTH_OFF, i + MARKER_SIZE + length, &mut header_info)?;
+                parse_dht(
+                    data,
+                    i + MARKER_SIZE + SEG_LENGTH_OFF,
+                    i + MARKER_SIZE + length,
+                    &mut header_info,
+                )?;
                 i += MARKER_SIZE + length;
                 continue;
             }
@@ -350,7 +360,12 @@ pub fn parse_jpeg_header(data: &[u8]) -> Result<JpegHeaderInfo, &'static str> {
                     i += 1;
                     continue;
                 };
-                parse_dqt(data, i + MARKER_SIZE + SEG_LENGTH_OFF, i + MARKER_SIZE + length, &mut header_info)?;
+                parse_dqt(
+                    data,
+                    i + MARKER_SIZE + SEG_LENGTH_OFF,
+                    i + MARKER_SIZE + length,
+                    &mut header_info,
+                )?;
                 i += MARKER_SIZE + length;
                 continue;
             }
@@ -403,7 +418,8 @@ fn parse_dht(
 
         for j in 0..num_values {
             if offset + DHT_TABLE_HDR_SIZE + j < data.len() {
-                header_info.huff_tables[table_idx].values[j] = data[offset + DHT_TABLE_HDR_SIZE + j];
+                header_info.huff_tables[table_idx].values[j] =
+                    data[offset + DHT_TABLE_HDR_SIZE + j];
             }
         }
         header_info.huff_tables[table_idx].num_values = num_values;
@@ -439,8 +455,9 @@ fn parse_dqt(
             // Pq=1:16-bit 系数,每项 2 字节大端
             for j in 0..DQT_TABLE_ENTRIES {
                 if offset + 1 + j * 2 + 1 < data.len() {
-                    header_info.quant_tables[tq].values[j] =
-                        ((data[offset + 1 + j * 2] as u16) << 8) | (data[offset + 1 + j * 2 + 1] as u16);
+                    header_info.quant_tables[tq].values[j] = ((data[offset + 1 + j * 2] as u16)
+                        << 8)
+                        | (data[offset + 1 + j * 2 + 1] as u16);
                 }
             }
             offset += 1 + DQT_TABLE_ENTRIES * 2;

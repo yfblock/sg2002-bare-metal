@@ -30,7 +30,6 @@ pub mod device;
 pub mod dwc2;
 pub mod uvc;
 
-
 // DWC2 寄存器一律走 [`dwc2::regs`] 的 `tock-registers` 访问器。
 
 /// 取 DWC2 全局寄存器视图（基址为编译期常量，恒有效）。
@@ -38,4 +37,3 @@ pub mod uvc;
 pub fn dwc2_regs() -> &'static Dwc2Regs {
     unsafe { &*(crate::platform::DWC2_BASE as *const Dwc2Regs) }
 }
-

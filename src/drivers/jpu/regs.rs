@@ -1,7 +1,7 @@
 //! JPU MMIO 寄存器（`tock-registers`）与平台 bring-up 辅助函数。
 
 use tock_registers::{
-    interfaces::{Readable, ReadWriteable, Writeable},
+    interfaces::{ReadWriteable, Readable, Writeable},
     register_bitfields, register_structs,
     registers::{ReadOnly, ReadWrite},
 };
@@ -256,4 +256,3 @@ pub fn wait_bbc_idle() {
         core::hint::spin_loop();
     }
 }
-

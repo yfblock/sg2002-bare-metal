@@ -3,12 +3,12 @@
 
 use tock_registers::interfaces::Readable;
 
+use super::channel::{next_uframe_oddfrm, Channel};
+use super::dma::{dma_ptr, UVC_BULK_DMA_CAP};
+use super::regs::HCINT;
+use super::regs::{HCCHAR, HCTSIZ};
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
-use super::regs::HCINT;
-use super::channel::{Channel, next_uframe_oddfrm};
-use super::regs::{HCCHAR, HCTSIZ};
-use super::dma::{dma_ptr, UVC_BULK_DMA_CAP};
 use tock_registers::fields::FieldValue;
 
 /// `wMaxPacketSize` 原始值 → 低 11 位（每事务最大字节数）。
@@ -47,12 +47,20 @@ impl IsochInEp {
     ///   bit12..11 为高带宽倍数减一）。
     #[inline]
     pub fn new(dev: u32, ep_num: u8, mps_raw: u16) -> Self {
-        Self { dev, ep_num: ep_num as u32, mps_raw }
+        Self {
+            dev,
+            ep_num: ep_num as u32,
+            mps_raw,
+        }
     }
 
     /// 本端点的 HCCHAR(IN 方向)。参数为本次会话的单事务包长与
     /// 每微帧事务数(高带宽倍数)。
-    fn hcchar(&self, max_packet_size: u32, transactions_per_uframe: u32) -> FieldValue<u32, HCCHAR::Register> {
+    fn hcchar(
+        &self,
+        max_packet_size: u32,
+        transactions_per_uframe: u32,
+    ) -> FieldValue<u32, HCCHAR::Register> {
         HCCHAR::MPS.val(max_packet_size)
             + HCCHAR::EPNUM.val(self.ep_num)
             + HCCHAR::DEVADDR.val(self.dev)
@@ -90,9 +98,8 @@ impl IsochInEp {
             _ => HCTSIZ::PID::Data0,
         };
 
-        let hctsiz = pid
-            + HCTSIZ::PKTCNT.val(transactions_per_uframe)
-            + HCTSIZ::XFERSIZE.val(transfer_size);
+        let hctsiz =
+            pid + HCTSIZ::PKTCNT.val(transactions_per_uframe) + HCTSIZ::XFERSIZE.val(transfer_size);
         let odd_frame = next_uframe_oddfrm();
 
         let channel = Channel::VIDEO;

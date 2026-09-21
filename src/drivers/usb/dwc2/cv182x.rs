@@ -8,12 +8,12 @@
 
 use tock_registers::interfaces::{ReadWriteable, Readable, Writeable};
 
-use crate::drivers::usb;
 use super::channel::spin_delay;
 use super::regs::{
-    GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GNPTXFSIZ, GRXFSIZ, GSNPSID, GUSBCFG,
-    HPTXFSIZ, Cv182xUsb2Phy,
+    Cv182xUsb2Phy, GAHBCFG, GDFIFOCFG, GHWCFG2, GHWCFG3, GHWCFG4, GNPTXFSIZ, GRXFSIZ, GSNPSID,
+    GUSBCFG, HPTXFSIZ,
 };
+use crate::drivers::usb;
 use crate::drivers::usb::error::UsbResult;
 
 /// GDFIFOCFG 配置分界（Linux `core.h`/`hcd.c`:版本 ≥ 2.91a 时写 GDFIFOCFG）。
@@ -68,9 +68,8 @@ pub(crate) fn init_gusbcfg_cv182x_utmi16_hs() {
     let want_16bit = utmi_w == 1; // 16-bit only 时才必须 PHYIF16=1
     log::debug!("USB-DBG GHWCFG4.UTMI_PHY_DATA_WIDTH={utmi_w} (0=8 only, 1=16 only, 2=programmable) => PHYIF16={}",
         if want_16bit { 1 } else { 0 });
-    let mut field = GUSBCFG::FORCEHOSTMODE::SET
-        + GUSBCFG::ULPI_UTMI_SEL::CLEAR
-        + GUSBCFG::TOUTCAL.val(0x7);
+    let mut field =
+        GUSBCFG::FORCEHOSTMODE::SET + GUSBCFG::ULPI_UTMI_SEL::CLEAR + GUSBCFG::TOUTCAL.val(0x7);
     if want_16bit {
         field += GUSBCFG::PHYIF16::SET;
     } else {
@@ -82,9 +81,8 @@ pub(crate) fn init_gusbcfg_cv182x_utmi16_hs() {
 pub(crate) fn init_gahb_dma_cv182x() {
     let dwc2 = usb::dwc2_regs();
     let arch = dwc2.ghwcfg2.read(GHWCFG2::ARCH);
-    dwc2.gahbcfg.modify(
-        GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET,
-    );
+    dwc2.gahbcfg
+        .modify(GAHBCFG::HBSTLEN::Incr16 + GAHBCFG::GLBL_INTR_EN::SET);
     if arch == 2 {
         dwc2.gahbcfg.modify(GAHBCFG::DMA_EN::SET);
     }
@@ -104,6 +102,9 @@ pub(crate) fn cv182x_usb2_phy_host_clear_utmi_override() {
     phy.reg014.set(0);
     spin_delay(200_000);
     let now = phy.reg014.get();
-    log::debug!("USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
-        old, now);
+    log::debug!(
+        "USB-DBG REG014 {:#06x}->{:#06x} (UTMI_OVERRIDE cleared, DWC2 drives pulldowns)",
+        old,
+        now
+    );
 }

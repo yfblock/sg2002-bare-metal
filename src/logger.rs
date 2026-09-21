@@ -21,9 +21,9 @@ use crate::drivers::mailbox::{CTX_SLOT2, CTX_SLOT3};
 const ME: usize = 1; // 小核 = 1;大核 = 0
 const LOCK_SPIN_LIMIT: u32 = 2_000_000; // 自旋上限;超时强闯(防上电遗留脏值)
 use crate::platform::UART0_BASE;
-use tock_registers::{register_bitfields, register_structs};
 use tock_registers::interfaces::{Readable, Writeable};
 use tock_registers::registers::{ReadOnly, WriteOnly};
+use tock_registers::{register_bitfields, register_structs};
 
 register_bitfields![u32,
     /// LSR（+0x14）：线路状态。

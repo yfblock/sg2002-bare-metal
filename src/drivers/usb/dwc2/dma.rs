@@ -55,7 +55,9 @@ pub fn dma_rx_slice(off: usize, len: usize) -> Option<&'static [u8]> {
 /// - `off`：相对 DMA 窗口起始的偏移。
 /// - `src`：要拷贝进去的源数据。
 pub fn dma_write_at(off: usize, src: &[u8]) -> UsbResult<()> {
-    let end = off.checked_add(src.len()).ok_or(UsbError::Protocol("dma write overflow"))?;
+    let end = off
+        .checked_add(src.len())
+        .ok_or(UsbError::Protocol("dma write overflow"))?;
     if end > DMA_BUF_TOTAL {
         return Err(UsbError::Protocol("dma write out of buf"));
     }

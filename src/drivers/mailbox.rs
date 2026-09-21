@@ -13,8 +13,8 @@
 //! 本驱动只做寄存器原语；DRAM 邮箱协议（0x9004_0000 共享内存 ABI + 帧通知 +
 //! B2S 控制消息）在 [`crate::ipc`]。
 
-use tock_registers::register_structs;
 use tock_registers::interfaces::{Readable, Writeable};
+use tock_registers::register_structs;
 use tock_registers::registers::{ReadOnly, ReadWrite, WriteOnly};
 
 /// 控制器 MMIO 基址。

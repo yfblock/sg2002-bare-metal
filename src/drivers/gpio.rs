@@ -34,12 +34,17 @@ pub struct GPIO {
 impl GPIO {
     /// 创建 GPIO 实例（基址由调用方传入，如 `platform::GPIO1_BASE`）
     pub unsafe fn new(base: usize) -> Self {
-        Self { regs: &*(base as *const GpioRegs) }
+        Self {
+            regs: &*(base as *const GpioRegs),
+        }
     }
 
     /// 获取指定引脚的句柄
     pub fn pin(&self, num: u8) -> Pin {
-        Pin { regs: self.regs, num }
+        Pin {
+            regs: self.regs,
+            num,
+        }
     }
 }
 
@@ -57,6 +62,8 @@ impl Pin {
 
     /// 设置输出电平
     pub fn set(&self, high: bool) {
-        self.regs.dr.modify(PIN::VAL.val(if high { 1u32 << self.num } else { 0 }));
+        self.regs
+            .dr
+            .modify(PIN::VAL.val(if high { 1u32 << self.num } else { 0 }));
     }
 }

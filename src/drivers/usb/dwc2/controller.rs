@@ -16,10 +16,7 @@ use crate::drivers::usb;
 /// 软复位序列分界：见 Linux `dwc2_core_reset()`（≥ 4.20a 用 `CSFTRST_DONE`，不再傻等 `CSFTRST` 自清）。
 const DWC2_CORE_REV_4_20A: u32 = 0x420a;
 use super::channel::{poll_until, spin_delay};
-use super::regs::{
-    GSNPSID, GINTMSK, GINTSTS, GOTGCTL, GRSTCTL,
-    GUSBCFG, HCFG, HPRT0,
-};
+use super::regs::{GINTMSK, GINTSTS, GOTGCTL, GRSTCTL, GSNPSID, GUSBCFG, HCFG, HPRT0};
 
 /// `dwc2_host_init` 内超时（`wait_ahb_idle` / 软复位 / FIFO flush）时转储；与 EP0 的 `USB-TOUT ch_*` 区分。
 fn dbg_dwc2_init_timeout(phase: &'static str) {
@@ -35,14 +32,21 @@ fn dbg_dwc2_init_timeout(phase: &'static str) {
     let tx_flush = dwc2.grstctl.is_set(GRSTCTL::TXFFLSH);
     log::warn!("USB-TOUT dwc2-init [{}] GRSTCTL={:#010x} AHBIDLE={} CSFTRST={} CSFTRST_DONE={} RXFFLSH={} TXFFLSH={}",
         phase, grst, ahb_idle, csftrst, rst_done, rx_flush, tx_flush);
-    log::warn!("USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
-        phase, gint, gahb, hprt);
+    log::warn!(
+        "USB-TOUT dwc2-init [{}] GINTSTS={:#010x} GAHBCFG={:#010x} HPRT0={:#010x}",
+        phase,
+        gint,
+        gahb,
+        hprt
+    );
 }
 
 // Linux `core.h`：`snpsid >= 0x4f54291a` 时配置 `GDFIFOCFG`（`hcd.c`）。
 
 fn wait_ahb_idle() -> UsbResult<()> {
-    if poll_until(3_000_000, 32, || usb::dwc2_regs().grstctl.is_set(GRSTCTL::AHBIDLE)) {
+    if poll_until(3_000_000, 32, || {
+        usb::dwc2_regs().grstctl.is_set(GRSTCTL::AHBIDLE)
+    }) {
         return Ok(());
     }
     dbg_dwc2_init_timeout("wait_ahb_idle");
@@ -67,7 +71,11 @@ fn core_soft_reset() -> UsbResult<()> {
         spin_delay(4096);
         return Ok(());
     }
-    dbg_dwc2_init_timeout(if new_rst_seq { "core_soft_reset CSFTRST_DONE" } else { "core_soft_reset CSFTRST (legacy)" });
+    dbg_dwc2_init_timeout(if new_rst_seq {
+        "core_soft_reset CSFTRST_DONE"
+    } else {
+        "core_soft_reset CSFTRST (legacy)"
+    });
     Err(UsbError::Timeout)
 }
 
@@ -78,7 +86,9 @@ fn force_host_mode() -> UsbResult<()> {
     if poll_until(500_000, 32, || dwc2.gintsts.is_set(GINTSTS::CURMODE_HOST)) {
         return Ok(());
     }
-    Err(UsbError::Hardware("CURMODE_HOST not set after FORCEHOSTMODE"))
+    Err(UsbError::Hardware(
+        "CURMODE_HOST not set after FORCEHOSTMODE",
+    ))
 }
 
 /// 设/清 HPRT0 的 `PWR` 与 `RST`（本驱动仅需写这两个普通字段）。
@@ -96,7 +106,7 @@ pub fn hprt0_port(pwr: bool, rst: bool) {
             + HPRT0::CONNDET.val(0)
             + HPRT0::ENA.val(0)
             + HPRT0::ENACHG.val(0)
-            + HPRT0::OVRCURCHG.val(0)
+            + HPRT0::OVRCURCHG.val(0),
     );
 }
 
@@ -110,13 +120,15 @@ pub fn port_reset_pulse() {
     hprt0_port(true, true); // 保留 PWR,拉 PRTRST
     delay(Duration::from_millis(60)); // PRTRST 60ms
     hprt0_port(true, false); // 解 PRTRST
-    // TRSTRCY：reset 解除到首次 SETUP 之间 ≥10ms，慢 U 盘需 50–100ms 让 PHY 完成
-    // chirp K-J-K-J + 内部 controller 启动。这里给 ~80ms 保守余量。
+                             // TRSTRCY：reset 解除到首次 SETUP 之间 ≥10ms，慢 U 盘需 50–100ms 让 PHY 完成
+                             // chirp K-J-K-J + 内部 controller 启动。这里给 ~80ms 保守余量。
     delay(Duration::from_millis(80)); // TRSTRCY 80ms
 }
 
-
-fn wait_grstctl_handshake(field: tock_registers::fields::Field<u32, GRSTCTL::Register>, set: bool) -> UsbResult<()> {
+fn wait_grstctl_handshake(
+    field: tock_registers::fields::Field<u32, GRSTCTL::Register>,
+    set: bool,
+) -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
     if poll_until(3_000_000, 8, || dwc2.grstctl.is_set(field) == set) {
         spin_delay(64);
@@ -176,7 +188,8 @@ pub fn dwc2_host_init() -> UsbResult<()> {
     dwc2.pcgctl.set(0);
     super::cv182x::init_gahb_dma_cv182x();
     // Linux 在 HS 下不置 HCFG_FSLSSUPP（RPi/全速演示才需要 FSLS）。
-    dwc2.hcfg.modify(HCFG::FSLSSUPP::CLEAR + HCFG::FSLSPCLKSEL.val(0));
+    dwc2.hcfg
+        .modify(HCFG::FSLSSUPP::CLEAR + HCFG::FSLSPCLKSEL.val(0));
     super::cv182x::init_host_fifos_cv182x()?;
     flush_tx_fifo_host_all()?;
     flush_rx_fifo_host()?;

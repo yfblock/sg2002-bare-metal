@@ -5,8 +5,8 @@
 //! 核内中断控制器 CLINT/PLIC 的地址在 arch 层(使用方唯一)。另带 USB 平台初始化(与 arceos `usb_camera` / StarryOS `cvi_usb_camera` 等价,
 //! 裸机 identity 映射 VA=PA 无需运行时安装）与 TOP/CLKGEN/IOBLK 寄存器视图。
 use tock_registers::interfaces::{ReadWriteable, Writeable};
-use tock_registers::{register_bitfields, register_structs};
 use tock_registers::registers::ReadWrite;
+use tock_registers::{register_bitfields, register_structs};
 
 use crate::drivers::gpio::GPIO;
 use crate::drivers::pinmux;
@@ -181,9 +181,11 @@ unsafe fn cvitek_usb_top_host_bringup() {
     crate::arch::time::delay(core::time::Duration::from_micros(50));
 
     // PHY_ID=11(device)→11 保持,再切 PHY_ID=01(host);MODE 位均为 host 驱动
-    top.usb_pin.modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b11));
+    top.usb_pin
+        .modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b11));
     crate::arch::time::delay(core::time::Duration::from_millis(1));
-    top.usb_pin.modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b01));
+    top.usb_pin
+        .modify(TOP_USB_PIN::MODE::SET + TOP_USB_PIN::PHY_ID.val(0b01));
     crate::arch::time::delay(core::time::Duration::from_millis(1));
 
     top.eco.modify(TOP_ECO::USB::SET);

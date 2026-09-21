@@ -4,7 +4,6 @@
 //!
 //! 布局常量在 `crate::platform` 的「预留 rtos 区共享布局」段(单一事实来源)。
 
-
 /// YUV 三平面 + 步长。4:2:2 planar:色度平面 `(w/2) × h`,stride_c = w/2。
 pub struct YuvPlanes {
     pub y: usize,
