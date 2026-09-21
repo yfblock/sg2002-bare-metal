@@ -100,17 +100,13 @@ pub fn hprt0_port(pwr: bool, rst: bool) {
     );
 }
 
-/// 在已检测到设备连接后发出 **USB 总线复位**（应在 `CONNSTS==1` 之后调用，符合主机枚举顺序）。
-///
-/// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
+/// 在已检测到设备连接后发出 **USB 总线复位**（应在 `CONNSTS==1` 之后调用，
+/// 符合主机枚举顺序）。CONNDET 的 W1C 在调用方
+/// [`RootHub::clear_connection_change`](crate::drivers::usb::hub::RootHub) 完成。
 pub fn port_reset_pulse() {
     // USB 2.0 spec TDRSTR (root hub reset) min = 50ms（实测 cv182x 的 PHY chirp K/J
     // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
-    // 这里给到 ≥60ms 留余量，并保留 PWR；CONNDET 若是 pending 先写 1 清掉。
-    let dwc2 = usb::dwc2_regs();
-    if dwc2.hprt0.is_set(HPRT0::CONNDET) {
-        dwc2.hprt0.modify(HPRT0::CONNDET::SET); // W1C:写 1 清 pending
-    }
+    // 这里给到 ≥60ms 留余量，并保留 PWR。
     hprt0_port(true, true); // 保留 PWR,拉 PRTRST
     delay(Duration::from_millis(60)); // PRTRST 60ms
     hprt0_port(true, false); // 解 PRTRST

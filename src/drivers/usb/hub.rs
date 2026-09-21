@@ -7,7 +7,7 @@
 
 use core::time::Duration;
 
-use tock_registers::interfaces::Readable;
+use tock_registers::interfaces::{Readable, ReadWriteable};
 
 use super::device::{enumerate_device, UsbDevice};
 use super::dwc2::{self, regs::HPRT0};
@@ -42,11 +42,10 @@ pub trait Hub {
     /// 复位端口并**等待稳定**（根口 `PRTRST` 脉冲含自带时序；外部 hub
     /// `SET_FEATURE(PORT_RESET)` + `TDRSTR`/`TRSTRCY` 等待）。
     fn reset_port(&self, port: u8) -> UsbResult<()>;
-    /// 清 CONNECTION 变化位（根口 no-op——复位脉冲内已 W1C；外部
+    /// 清 CONNECTION 变化位（根口 `HPRT0.CONNDET` W1C；外部
     /// `CLEAR_FEATURE(C_PORT_CONNECTION)`）。
     fn clear_connection_change(&self, port: u8) -> UsbResult<()>;
-    /// 清 RESET 变化位（根口 no-op——`PRTRST` 自清；外部
-    /// `CLEAR_FEATURE(C_PORT_RESET)`）。
+    /// 清 RESET 变化位（外部 `CLEAR_FEATURE(C_PORT_RESET)`）。
     fn clear_reset_change(&self, port: u8) -> UsbResult<()>;
     /// 端口上电稳定时间（外部 hub 描述符 `bPwrOn2PwrGood`；根口常驻供电，0）。
     fn pwr_good(&self) -> Duration;
@@ -160,11 +159,19 @@ impl Hub for RootHub {
     }
 
     fn clear_connection_change(&self, _port: u8) -> UsbResult<()> {
-        Ok(()) // CONNDET W1C 在复位脉冲内完成
+        // CONNDET 为连接/断开事件的沿位,W1C 清 pending——与外部 hub 的
+        // CLEAR_FEATURE(C_PORT_CONNECTION) 同义。
+        let p = &super::dwc2_regs().hprt0;
+        if p.is_set(HPRT0::CONNDET) {
+            p.modify(HPRT0::CONNDET::SET);
+        }
+        Ok(())
     }
 
     fn clear_reset_change(&self, _port: u8) -> UsbResult<()> {
-        Ok(()) // PRTRST 释放时自清
+        // 诚实 no-op:HPRT0 无 C_PORT_RESET 对应位——PRTRST 是控制位(写 0 释放),
+        // 复位完成由 ENA=1 电平观察,无沿位可清(ENACHG 是 enable 语义,不冒充)。
+        Ok(())
     }
 
     fn pwr_good(&self) -> Duration {
