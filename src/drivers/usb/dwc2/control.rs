@@ -50,7 +50,7 @@ impl Ep0 {
     fn setup_stage(&self, setup_packet: &[u8; 8]) -> UsbResult<()> {
         unsafe {
             core::ptr::copy_nonoverlapping(setup_packet.as_ptr(), dma_ptr().add(OFF_EP0), 8);
-            cache::dcache_clean_range(dma_ptr().add(OFF_EP0) as usize, 8);
+            cache::dcache_clean_range(dma_ptr() as usize + OFF_EP0, 8);
             Channel::CONTROL.xfer(
                 self.hcchar(false),
                 HCTSIZ::PID::Setup + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(8),
@@ -88,7 +88,7 @@ impl Ep0 {
                 HCTSIZ::PID::Data1 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(wlen as u32),
                 OFF_EP0 as u32,
             )?;
-            cache::dcache_invalidate_range(dma_ptr().add(OFF_EP0) as usize, wlen as usize);
+            cache::dcache_invalidate_range(dma_ptr() as usize + OFF_EP0, wlen as usize);
 
             let sl = core::slice::from_raw_parts(dma_ptr().add(OFF_EP0), wlen as usize);
             if sl.len() < 12 {

@@ -90,48 +90,46 @@ impl IsochInEp {
             _ => HCTSIZ::PID::Data0,
         };
 
-        unsafe {
-            let hctsiz = pid
-                + HCTSIZ::PKTCNT.val(transactions_per_uframe)
-                + HCTSIZ::XFERSIZE.val(transfer_size);
-            let odd_frame = next_uframe_oddfrm();
+        let hctsiz = pid
+            + HCTSIZ::PKTCNT.val(transactions_per_uframe)
+            + HCTSIZ::XFERSIZE.val(transfer_size);
+        let odd_frame = next_uframe_oddfrm();
 
-            let channel = Channel::VIDEO;
-            channel.arm(
-                hctsiz,
-                (self.hcchar(max_packet_size, transactions_per_uframe)
-                    + odd_frame
-                    + HCCHAR::CHENA::SET)
-                    .value,
-                dma_off as u32,
-            )?;
+        let channel = Channel::VIDEO;
+        channel.arm(
+            hctsiz,
+            (self.hcchar(max_packet_size, transactions_per_uframe)
+                + odd_frame
+                + HCCHAR::CHENA::SET)
+                .value,
+            dma_off as u32,
+        )?;
 
-            let hcint = channel.wait_halted()?;
-            if hcint.is_set(HCINT::STALL) {
-                return Err(UsbError::Stall);
-            }
-            if hcint.is_set(HCINT::AHBERR) {
-                return Err(UsbError::Hardware("AHBERR on isoch"));
-            }
-            if hcint.is_set(HCINT::FRMOVRN)
-                || hcint.is_set(HCINT::XACTERR)
-                || hcint.is_set(HCINT::BBLERR)
-                || hcint.is_set(HCINT::DATATGLERR)
-                || hcint.is_set(HCINT::NYET)
-                || hcint.is_set(HCINT::NAK)
-            {
-                return Ok(0);
-            }
-            if !hcint.is_set(HCINT::XFERCOMPL) {
-                return Ok(0);
-            }
-            // HCTSIZ.XFERSIZE 传输结束后的余量 = 期望总量 − 实收字节。
-            let remaining_bytes = channel.chan_regs().hctsiz.read(HCTSIZ::XFERSIZE);
-            let received_bytes = transfer_size.saturating_sub(remaining_bytes) as usize;
-            if received_bytes > 0 {
-                cache::dcache_invalidate_range(dma_ptr().add(dma_off) as usize, received_bytes);
-            }
-            Ok(received_bytes)
+        let hcint = channel.wait_halted()?;
+        if hcint.is_set(HCINT::STALL) {
+            return Err(UsbError::Stall);
         }
+        if hcint.is_set(HCINT::AHBERR) {
+            return Err(UsbError::Hardware("AHBERR on isoch"));
+        }
+        if hcint.is_set(HCINT::FRMOVRN)
+            || hcint.is_set(HCINT::XACTERR)
+            || hcint.is_set(HCINT::BBLERR)
+            || hcint.is_set(HCINT::DATATGLERR)
+            || hcint.is_set(HCINT::NYET)
+            || hcint.is_set(HCINT::NAK)
+        {
+            return Ok(0);
+        }
+        if !hcint.is_set(HCINT::XFERCOMPL) {
+            return Ok(0);
+        }
+        // HCTSIZ.XFERSIZE 传输结束后的余量 = 期望总量 − 实收字节。
+        let remaining_bytes = channel.chan_regs().hctsiz.read(HCTSIZ::XFERSIZE);
+        let received_bytes = transfer_size.saturating_sub(remaining_bytes) as usize;
+        if received_bytes > 0 {
+            cache::dcache_invalidate_range(dma_ptr() as usize + dma_off, received_bytes);
+        }
+        Ok(received_bytes)
     }
 }
