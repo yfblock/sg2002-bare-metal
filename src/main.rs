@@ -42,8 +42,7 @@ mod platform;
 mod drivers;
 
 use crate::drivers::usb::{dwc2, uvc};
-use crate::drivers::usb::hub::RootHub;
-use crate::drivers::usb::topology;
+use crate::drivers::usb::hub::{enumerate_bus, RootHub};
 
 const FPS_REPORT_EVERY: u32 = 100;
 
@@ -59,7 +58,7 @@ pub(crate) extern "C" fn rust_main() -> ! {
 
     // UVC 初始化(同步,一次性):主机 bring-up → 树遍历枚举 → 打开会话
     dwc2::dwc2_host_init().expect("host init");
-    let cam = topology::enumerate_bus(&RootHub).expect("enum");
+    let cam = enumerate_bus(&RootHub).expect("enum");
     logger::print_fmt(format_args!(
         "[USB] camera VID={:04x} PID={:04x} addr={} speed={}\n",
         cam.vid, cam.pid, cam.ep0.dev(), cam.speed.as_str()

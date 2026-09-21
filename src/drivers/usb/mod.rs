@@ -2,8 +2,7 @@
 //!
 //! 子模块：
 //! - [`dwc2`]：DWC2 控制器（寄存器/bring-up/EP0 与等时传输）。
-//! - [`enumerate`]：根口连接检查 + 拓扑扫描入口。
-//! - [`topology`]：Hub 描述符解析与端口递归枚举。
+//! - [`hub`]：Hub 抽象 + 总线枚举（Linux hub.c 模型）。
 //!
 //! 单板裸机、identity 映射（VA=PA）：控制器/PHY MMIO 基址直接取
 //! [`crate::platform`] 的地址表常量，无需运行时配置。
@@ -29,7 +28,6 @@ pub mod setup;
 
 pub mod device;
 pub mod dwc2;
-pub mod topology;
 pub mod uvc;
 
 

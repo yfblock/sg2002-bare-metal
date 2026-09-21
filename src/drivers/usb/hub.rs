@@ -3,15 +3,38 @@
 //! [`connect_reset_sequence`]）对两种上游无差别——多态调用点真实存在。
 //!
 //! 状态统一为 USB 2.0 §11.24.2 `wPortStatus` word0 布局（根口现场转换，
-//! Linux `dwc2_hcd_hub_control` 同款做法）。
+//! Linux `dwc2_hcd_hub_control` 同款做法）。总线枚举（[`enumerate_bus`] /
+//! [`Hub::walk_subtree`]/[`dispatch_device`]）也在本模块——Linux hub.c 模型:
+//! hub 驱动拥有树遍历与设备分派。
 
 use core::time::Duration;
 
 use tock_registers::interfaces::{Readable, ReadWriteable};
 
-use super::device::{enumerate_device, UsbDevice};
+use super::device::{enumerate_device, UsbDevice, DRIVERS};
 use super::dwc2::{self, regs::HPRT0};
 use super::error::{UsbError, UsbResult};
+
+// ---- 总线遍历(topology 并入;Linux hub.c 模型:hub 驱动拥有枚举) ----
+
+/// 拓扑日志缩进（每级 2 空格，封顶 12 级）。
+#[inline]
+fn topo_indent(depth: u8) -> &'static str {
+    const SPACES: &str = "                        ";
+    &SPACES[..2 * (depth as usize).min(SPACES.len() / 2)]
+}
+
+macro_rules! topo_log {
+    ($depth:expr, $($tt:tt)*) => {
+        ::log::info!(
+            target: "sg200x_bsp::usb::hub",
+            "{}{}",
+            topo_indent($depth),
+            format_args!($($tt)*)
+        )
+    };
+}
+
 /// Hub 端口特性：`PORT_RESET`。
 const HUB_PORT_FEATURE_RESET: u16 = 4;
 /// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
@@ -87,33 +110,68 @@ pub trait Hub {
         let w0 = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
-                log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} GET_PORT_STATUS: {:?}", port, e);
+                log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} GET_PORT_STATUS: {:?}", port, e);
                 return Err(UsbError::NotPresent);
             }
         };
         if w0 & W0_CONNECTION == 0 {
-            log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} empty (w0={:#06x})", port, w0);
+            log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} empty (w0={:#06x})", port, w0);
             return Err(UsbError::NotPresent);
         }
         if let Err(e) = self.connect_reset_sequence(port) {
-            log::warn!(target: "sg200x_bsp::usb::topology", "[USB] port {} reset sequence: {:?}", port, e);
+            log::warn!(target: "sg200x_bsp::usb::hub", "[USB] port {} reset sequence: {:?}", port, e);
             return Err(UsbError::NotPresent);
         }
         let after = match self.port_status_w0(port) {
             Ok(s) => s,
             Err(e) => {
-                log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} after-reset status: {:?}", port, e);
+                log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} after-reset status: {:?}", port, e);
                 return Err(UsbError::NotPresent);
             }
         };
         if after & W0_ENABLE == 0 {
-            log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} reset done but not enabled (w0={:#06x})", port, after);
+            log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} reset done but not enabled (w0={:#06x})", port, after);
             return Err(UsbError::NotPresent);
         }
         let speed = PortSpeed::from_status(after);
-        log::info!(target: "sg200x_bsp::usb::topology", "[USB] port {} enabled w0={:#06x} SPD={}",
+        log::info!(target: "sg200x_bsp::usb::hub", "[USB] port {} enabled w0={:#06x} SPD={}",
             port, after, speed.as_str());
         Ok(enumerate_device(speed, next_addr)?)
+    }
+
+    /// **树遍历**(Linux hub.c 模型):供电 → 等稳定 → 逐口取子设备
+    /// ([`Self::enumerate_child`])并递归 [`dispatch_device`];返回子树被
+    /// 接管的设备(多台先到先得)。单口 NotPresent 只跳过不中断;子树
+    /// 无人接管 = `Err(NotPresent)`。
+    fn walk_subtree(&self, depth: u8, next_addr: &mut u8) -> UsbResult<UsbDevice> {
+        let nports = self.nports();
+        // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
+        for port in 1..=nports {
+            if let Err(e) = self.port_power(port) {
+                topo_log!(depth, "[USB]   -> port {} POWER fail: {:?}", port, e);
+            }
+        }
+        // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
+        crate::arch::time::delay(self.pwr_good() + Duration::from_millis(100));
+
+        let mut claimed: Option<UsbDevice> = None;
+        for port in 1..=nports {
+            let child = match self.enumerate_child(port, next_addr) {
+                Ok(d) => d,
+                Err(UsbError::NotPresent) => continue, // 空口/端口级失败:跳过
+                Err(e) => return Err(e),               // 硬失败:中断整树
+            };
+            match dispatch_device(depth.saturating_add(1), child, next_addr) {
+                Ok(d) => {
+                    if claimed.is_none() {
+                        claimed = Some(d); // 多台候选先到先得
+                    }
+                }
+                Err(UsbError::NotPresent) => {} // 子树无人接管:继续扫其他口
+                Err(e) => return Err(e),
+            }
+        }
+        claimed.ok_or(UsbError::NotPresent)
     }
 }
 
@@ -203,11 +261,6 @@ impl<'a> DeviceHub<'a> {
             nports: buf[2].min(MAX_HUB_PORTS),
             pwr_on_pwr_good_ms: u32::from(buf[5]).saturating_mul(2),
         })
-    }
-
-    /// 描述符里的上电稳定毫秒数（供日志）。
-    pub fn pwr_good_ms(&self) -> u32 {
-        self.pwr_on_pwr_good_ms
     }
 }
 
@@ -327,4 +380,58 @@ pub(crate) fn hub_setup(req: HubRequest) -> [u8; 8] {
             [0xA0, 0x06, 0x00, USB_DT_HUB, 0x00, 0x00, ll, lh]
         }
     }
+}
+
+// ---- 总线遍历(topology 并入;Linux hub.c 模型:hub 驱动拥有枚举) ----
+
+/// 分派一台已枚举的设备:
+///
+/// - **Hub** → [`Hub::walk_subtree`] 递归下探;
+/// - **功能设备** → 类驱动注册表匹配,被接管则上抛;无人接管 =
+///   `Err(NotPresent)`(空枝软信号)。
+fn dispatch_device(depth: u8, dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
+    topo_log!(depth, "[USB] dev VID={:04x} PID={:04x} dev_class={:02x}",
+        dev.vid, dev.pid, dev.dev_class);
+
+    if dev.is_hub() {
+        let hub_addr = dev.ep0.dev() as u8;
+        topo_log!(depth, "[USB]   -> Hub addr={}", hub_addr);
+        return DeviceHub::new(&dev.ep0)?.walk_subtree(depth, next_addr);
+    }
+
+    // 功能设备:注册表顺序即优先级,首个匹配者胜出;驱动无状态。
+    topo_log!(depth, "[USB]   -> function addr={} first_ifc_class={:02x}",
+        dev.ep0.dev(), dev.iface_class);
+    match DRIVERS.iter().find(|d| d.matches(&dev)) {
+        Some(driver) => {
+            topo_log!(depth, "[USB]   -> driver \"{}\" took addr={}",
+                driver.name(), dev.ep0.dev());
+            Ok(dev)
+        }
+        None => Err(UsbError::NotPresent),
+    }
+}
+
+/// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
+/// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
+/// 上下文的硬错误)。
+pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
+    log::info!("[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)");
+
+    root.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
+    if !root.wait_connect(1, Duration::from_secs(5)) {
+        return Err(UsbError::Hardware(
+            "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
+        ));
+    }
+    let mut next_addr: u8 = 1;
+    let child = root.enumerate_child(1, &mut next_addr).map_err(|e| match e {
+        UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+        e => e,
+    })?;
+    log::info!("[USB] bus: scan finished.");
+    dispatch_device(0, child, &mut next_addr).map_err(|e| match e {
+        UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
+        e => e,
+    })
 }
