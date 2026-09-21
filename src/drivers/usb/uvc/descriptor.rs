@@ -73,17 +73,10 @@ pub struct UvcStreamSelection {
 /// 根据偏好 interval 从某 frame 描述符的可用 interval 集合中选最接近的值。
 ///
 /// 返回 0 表示未设偏好（调用方沿用 `min_ival`）；入参/候选/返回均为 100ns
-/// tick(`dwFrameInterval` 原始值)。`i` 为该 VS_FRAME 描述符在 `cfg` 中的起始
-/// 偏移，`bl` 为其 `bLength`；`ival_type`>0 为离散列表（其后跟 `ival_type` 个 u32），
-/// `ival_type==0` 为连续区间（`dwMinFrameInterval`@26 / `dwMaxFrameInterval`@30）。
-fn choose_frame_interval(
-    cfg: &[u8],
-    i: usize,
-    bl: usize,
-    dflt_ival: u32,
-    ival_type: u8,
-    pref: u32,
-) -> u32 {
+/// tick(`dwFrameInterval` 原始值)。`ival_type`>0 为离散列表（其后跟
+/// `ival_type` 个 u32），`ival_type==0` 为连续区间（`dwMinFrameInterval`@26 /
+/// `dwMaxFrameInterval`@30）。
+fn choose_frame_interval(d: Desc, dflt_ival: u32, ival_type: u8, pref: u32) -> u32 {
     if pref == 0 {
         return 0;
     }
@@ -102,25 +95,18 @@ fn choose_frame_interval(
     };
     let mut best: Option<u32> = None;
     if ival_type == 0 {
-        if bl >= 38 {
-            let lo = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
-            let hi = u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
-            if lo > 0 && hi > 0 {
-                let ival = pref.clamp(lo, hi);
-                best = best_for(ival, best);
+        if d.len >= 38 {
+            if let (Some(lo), Some(hi)) = (d.u32le(26), d.u32le(30)) {
+                if lo > 0 && hi > 0 {
+                    best = best_for(pref.clamp(lo, hi), best);
+                }
             }
         }
         best = best_for(dflt_ival, best);
     } else {
-        let count = ival_type as usize;
-        let mut pos = i + 26;
-        for _ in 0..count {
-            if pos + 4 > i + bl {
-                break;
-            }
-            let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+        for k in 0..ival_type as usize {
+            let Some(ival) = d.u32le(26 + 4 * k) else { break };
             best = best_for(ival, best);
-            pos += 4;
         }
         best = best_for(dflt_ival, best);
     }
@@ -143,6 +129,54 @@ pub struct UvcPrefs {
     pub frame_w: u16,
     pub frame_h: u16,
     pub frame_interval: Duration,
+}
+
+/// 越界检查的描述符读取视图:字段偏移相对描述符起点,长度为描述符自声明的
+/// `bLength`;越界读取得 `None`——取代散落各处的 `bl >= N` 前置判断,
+/// `from_le_bytes` 只在本视图出现。
+#[derive(Clone, Copy)]
+struct Desc<'a> {
+    buf: &'a [u8],
+    base: usize,
+    len: usize,
+}
+
+impl<'a> Desc<'a> {
+    /// 在 `buf[base]` 处构造视图;`end` 为扫描上限(`wTotalLength` 截断)。
+    /// `bLength` 缺失 / <2 / 越出 `end` 返回 `None`。
+    fn new(buf: &'a [u8], base: usize, end: usize) -> Option<Self> {
+        let bl = usize::from(*buf.get(base)?);
+        if bl < 2 || base + bl > end {
+            return None;
+        }
+        Some(Desc { buf, base, len: bl })
+    }
+
+    /// 描述符类型 `bDescriptorType`(@1;构造已保证存在)。
+    fn ty(&self) -> u8 {
+        self.buf[self.base + 1]
+    }
+
+    fn u8(&self, off: usize) -> Option<u8> {
+        (off < self.len).then(|| self.buf[self.base + off])
+    }
+
+    fn u16le(&self, off: usize) -> Option<u16> {
+        (off + 2 <= self.len).then(|| {
+            u16::from_le_bytes([self.buf[self.base + off], self.buf[self.base + off + 1]])
+        })
+    }
+
+    fn u32le(&self, off: usize) -> Option<u32> {
+        (off + 4 <= self.len).then(|| {
+            u32::from_le_bytes([
+                self.buf[self.base + off],
+                self.buf[self.base + off + 1],
+                self.buf[self.base + off + 2],
+                self.buf[self.base + off + 3],
+            ])
+        })
+    }
 }
 
 /// 单个 VS_FRAME 帧档位(打分/选择的最小单元;`ival` 为 100ns tick)。
@@ -169,27 +203,24 @@ struct IsochCandidates {
 /// 解析一个 VS_FRAME 描述符:读字段、算 min/default interval、打 fps 与
 /// interval 全表诊断日志、按偏好选定 interval。非 FRAME 子类型/长度不足
 /// 返回 `None`。
-fn parse_vs_frame(cfg: &[u8], i: usize, bl: usize, st: u8, fmt_ix: u8, pref_ticks: u32) -> Option<FramePick> {
-    if !(st == VS_FRAME_MJPEG || st == VS_FRAME_UNCOMPRESSED) || bl < 26 {
+fn parse_vs_frame(d: Desc, st: u8, fmt_ix: u8, pref_ticks: u32) -> Option<FramePick> {
+    if !(st == VS_FRAME_MJPEG || st == VS_FRAME_UNCOMPRESSED) {
         return None;
     }
-    let frame_ix = cfg[i + 3];
-    let w = u16::from_le_bytes([cfg[i + 5], cfg[i + 6]]);
-    let h = u16::from_le_bytes([cfg[i + 7], cfg[i + 8]]);
-    let dflt_ival = u32::from_le_bytes([cfg[i + 21], cfg[i + 22], cfg[i + 23], cfg[i + 24]]);
-    let ival_type = cfg[i + 25];
+    let frame_ix = d.u8(3)?;
+    let w = d.u16le(5)?;
+    let h = d.u16le(7)?;
+    let dflt_ival = d.u32le(21)?;
+    let ival_type = d.u8(25)?;
     let mut min_ival = dflt_ival;
-    if ival_type == 0 && bl >= 38 {
-        let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
-        if dw_min > 0 { min_ival = dw_min; }
+    if ival_type == 0 && d.len >= 38 {
+        if let Some(dw_min) = d.u32le(26) {
+            if dw_min > 0 { min_ival = dw_min; }
+        }
     } else if ival_type > 0 {
-        let count = ival_type as usize;
-        let mut pos = i + 26;
-        for _ in 0..count {
-            if pos + 4 > i + bl { break; }
-            let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+        for k in 0..ival_type as usize {
+            let Some(ival) = d.u32le(26 + 4 * k) else { break };
             if ival > 0 && ival < min_ival { min_ival = ival; }
-            pos += 4;
         }
     }
     // dwFrameInterval 是 **100ns** 单位，故 fps = 1e7/iv，fps*100 = 1e9/iv。
@@ -202,20 +233,15 @@ fn parse_vs_frame(cfg: &[u8], i: usize, bl: usize, st: u8, fmt_ix: u8, pref_tick
     // 把该 frame 支持的 interval **全列出来**——只看 dflt/min 无法判断
     // "某个目标帧率到底可选不可选"（离散表只有一档时，任何偏好都是空操作）。
     if ival_type > 0 {
-        let mut pos = i + 26;
         for k in 0..ival_type as usize {
-            if pos + 4 > i + bl {
-                break;
-            }
-            let ival = u32::from_le_bytes([cfg[pos], cfg[pos + 1], cfg[pos + 2], cfg[pos + 3]]);
+            let Some(ival) = d.u32le(26 + 4 * k) else { break };
             let fps = if ival > 0 { 1_000_000_000_u32 / ival } else { 0 };
             log::info!("UVC:   ival[{}] = {} ({}.{:02} fps)", k, ival, fps / 100, fps % 100);
-            pos += 4;
         }
-    } else if bl >= 38 {
-        let dw_min = u32::from_le_bytes([cfg[i + 26], cfg[i + 27], cfg[i + 28], cfg[i + 29]]);
-        let dw_max = u32::from_le_bytes([cfg[i + 30], cfg[i + 31], cfg[i + 32], cfg[i + 33]]);
-        let dw_step = u32::from_le_bytes([cfg[i + 34], cfg[i + 35], cfg[i + 36], cfg[i + 37]]);
+    } else if d.len >= 38 {
+        let dw_min = d.u32le(26).unwrap_or(0);
+        let dw_max = d.u32le(30).unwrap_or(0);
+        let dw_step = d.u32le(34).unwrap_or(0);
         let fmin = if dw_max > 0 { 1_000_000_000_u32 / dw_max } else { 0 };
         let fmax = if dw_min > 0 { 1_000_000_000_u32 / dw_min } else { 0 };
         log::info!("UVC:   ival continuous: min={dw_min} max={dw_max} step={dw_step} => {}.{:02}..{}.{:02} fps",
@@ -223,7 +249,7 @@ fn parse_vs_frame(cfg: &[u8], i: usize, bl: usize, st: u8, fmt_ix: u8, pref_tick
     }
     // 选定本 frame 描述符实际使用的 interval：
     // 设了偏好 interval 时选最接近它的可用值；否则沿用最小（最高 fps）。
-    let chosen_ival = choose_frame_interval(cfg, i, bl, dflt_ival, ival_type, pref_ticks);
+    let chosen_ival = choose_frame_interval(d, dflt_ival, ival_type, pref_ticks);
     let ival = if chosen_ival > 0 { chosen_ival } else if min_ival > 0 { min_ival } else { dflt_ival };
     Some(FramePick { fmt_ix, frame_ix, w, h, ival, is_mjpeg: st == VS_FRAME_MJPEG })
 }
@@ -251,15 +277,16 @@ fn frame_rank(p: &FramePick, prefs: &UvcPrefs) -> i32 {
 
 impl IsochCandidates {
     /// 考察一个 VS 接口下的端点描述符:IN 等时则记入初始猜测与 alt 全量表。
-    fn consider(&mut self, cfg: &[u8], i: usize, cur_alt: u8, cur_ifc_num: u8) {
-        let ep_addr = cfg[i + 2];
-        let attr = cfg[i + 3];
-        let mps_raw = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+    /// 字段不足(畸形描述符)静默跳过。
+    fn consider(&mut self, d: Desc, cur_alt: u8, cur_ifc_num: u8) -> Option<()> {
+        let ep_addr = d.u8(2)?;
+        let attr = d.u8(3)?;
+        let mps_raw = d.u16le(4)?;
         let mps = dwc2::wmax_mps(mps_raw);
         let mult = dwc2::wmax_mult(mps_raw);
         let xfer = attr & 0x03;
         if (ep_addr & 0x80) == 0 {
-            return; // 只关心 IN
+            return Some(()); // 只关心 IN
         }
         let ep_num = ep_addr & 0x0F;
         let total = u32::from(mps) * u32::from(mult);
@@ -286,6 +313,7 @@ impl IsochCandidates {
                 self.count += 1;
             }
         }
+        Some(())
     }
 }
 
@@ -312,28 +340,27 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
     let mut cur_fmt_ix = 0u8;
 
     while i + 2 <= len {
-        let bl = cfg[i] as usize;
-        if bl < 2 || i + bl > len {
-            break;
-        }
-        let ty = cfg[i + 1];
+        let Some(d) = Desc::new(cfg, i, len) else { break };
+        let ty = d.ty();
 
-        if ty == device::USB_DT_INTERFACE && bl >= 9 {
-            cur_ifc_num = cfg[i + 2];
-            cur_alt = cfg[i + 3];
-            cur_ifc_class = cfg[i + 5];
-            cur_ifc_sub = cfg[i + 6];
+        if ty == device::USB_DT_INTERFACE && d.len >= 9 {
+            cur_ifc_num = d.u8(2).unwrap_or(cur_ifc_num);
+            cur_alt = d.u8(3).unwrap_or(cur_alt);
+            cur_ifc_class = d.u8(5).unwrap_or(cur_ifc_class);
+            cur_ifc_sub = d.u8(6).unwrap_or(cur_ifc_sub);
         } else if ty == CS_INTERFACE
             && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
-            let st = cfg.get(i + 2).copied().unwrap_or(0);
-            if (st == VS_FORMAT_MJPEG || st == VS_FORMAT_UNCOMPRESSED) && bl >= 4 {
-                cur_fmt_ix = cfg[i + 3];
-                log::info!("UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={cur_fmt_ix} subtype={st:#06x} ({})",
-                    if st == VS_FORMAT_MJPEG { "MJPEG" } else { "Uncompressed" });
+            let st = d.u8(2).unwrap_or(0);
+            if st == VS_FORMAT_MJPEG || st == VS_FORMAT_UNCOMPRESSED {
+                if let Some(ix) = d.u8(3) {
+                    cur_fmt_ix = ix;
+                    log::info!("UVC: VS-fmt if={cur_ifc_num} alt={cur_alt} ix={cur_fmt_ix} subtype={st:#06x} ({})",
+                        if st == VS_FORMAT_MJPEG { "MJPEG" } else { "Uncompressed" });
+                }
             }
-            if let Some(pick) = parse_vs_frame(cfg, i, bl, st, cur_fmt_ix, pref_ticks) {
+            if let Some(pick) = parse_vs_frame(d, st, cur_fmt_ix, pref_ticks) {
                 let beats = match if pick.is_mjpeg { &mjpeg_pick } else { &uncomp_pick } {
                     None => true,
                     Some(prev) => frame_rank(&pick, prefs) > frame_rank(prev, prefs),
@@ -350,10 +377,10 @@ pub fn parse_uvc_video_stream(cfg: &[u8], cfg_total: usize, prefs: &UvcPrefs) ->
             && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_STREAMING
         {
-            isoch.consider(cfg, i, cur_alt, cur_ifc_num);
+            let _ = isoch.consider(d, cur_alt, cur_ifc_num);
         }
 
-        i += bl;
+        i += d.len;
     }
 
     let Some((alt, epn, mps_raw, vs_if)) = isoch.best else {
@@ -481,16 +508,13 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
     let mut found_vc = false;
 
     while i + 2 <= len {
-        let bl = cfg[i] as usize;
-        if bl < 2 || i + bl > len {
-            break;
-        }
-        let ty = cfg[i + 1];
+        let Some(d) = Desc::new(cfg, i, len) else { break };
+        let ty = d.ty();
 
-        if ty == device::USB_DT_INTERFACE && bl >= 9 {
-            cur_ifc_num = cfg[i + 2];
-            cur_ifc_class = cfg[i + 5];
-            cur_ifc_sub = cfg[i + 6];
+        if ty == device::USB_DT_INTERFACE && d.len >= 9 {
+            cur_ifc_num = d.u8(2).unwrap_or(0);
+            cur_ifc_class = d.u8(5).unwrap_or(cur_ifc_class);
+            cur_ifc_sub = d.u8(6).unwrap_or(cur_ifc_sub);
             if cur_ifc_class == device::USB_CLASS_VIDEO && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL {
                 out.vc_interface = cur_ifc_num;
                 found_vc = true;
@@ -498,45 +522,51 @@ pub fn parse_uvc_control_entities(cfg: &[u8], cfg_total: usize) -> Option<UvcCon
         } else if ty == CS_INTERFACE
             && cur_ifc_class == device::USB_CLASS_VIDEO
             && cur_ifc_sub == USB_SUBCLASS_VIDEO_CONTROL
-            && bl >= 3
+            && d.len >= 3
         {
-            let st = cfg[i + 2];
+            let st = d.u8(2).unwrap_or(0);
             match st {
                 VC_INPUT_TERMINAL
                     // bLength=15+x，bUnitID@3, wTerminalType@4..6, bAssocTerm@6,
                     // 后续 wObjectiveFocalLengthMin/Max + wOcularFocalLength + bControlSize@14, bmControls@15..
-                    if bl >= 15 => {
-                        let id = cfg[i + 3];
-                        let tt = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
-                        if tt == ITT_CAMERA {
-                            out.camera_terminal_id = Some(id);
-                            let csize = cfg[i + 14] as usize;
-                            let cmax = csize.min(bl.saturating_sub(15)).min(4);
-                            let mut bm = 0u32;
-                            for k in 0..cmax {
-                                bm |= u32::from(cfg[i + 15 + k]) << (8 * k);
-                            }
-                            out.ct_controls = bm;
-                        }
-                    }
-                VC_PROCESSING_UNIT
-                    // bLength=10+n，bUnitID@3, bSourceID@4, wMaxMultiplier@5..7, bControlSize@7, bmControls@8..
-                    if bl >= 9 => {
-                        let id = cfg[i + 3];
-                        let csize = cfg[i + 7] as usize;
-                        let cmax = csize.min(bl.saturating_sub(8)).min(4);
+                    if d.len >= 15 =>
+                {
+                    let id = d.u8(3).unwrap_or(0);
+                    let tt = d.u16le(4).unwrap_or(0);
+                    if tt == ITT_CAMERA {
+                        out.camera_terminal_id = Some(id);
+                        let csize = usize::from(d.u8(14).unwrap_or(0));
+                        let cmax = csize.min(d.len.saturating_sub(15)).min(4);
                         let mut bm = 0u32;
                         for k in 0..cmax {
-                            bm |= u32::from(cfg[i + 8 + k]) << (8 * k);
+                            if let Some(b) = d.u8(15 + k) {
+                                bm |= u32::from(b) << (8 * k);
+                            }
                         }
-                        out.processing_unit_id = Some(id);
-                        out.pu_controls = bm;
+                        out.ct_controls = bm;
                     }
+                }
+                VC_PROCESSING_UNIT
+                    // bLength=10+n，bUnitID@3, bSourceID@4, wMaxMultiplier@5..7, bControlSize@7, bmControls@8..
+                    if d.len >= 9 =>
+                {
+                    let id = d.u8(3).unwrap_or(0);
+                    let csize = usize::from(d.u8(7).unwrap_or(0));
+                    let cmax = csize.min(d.len.saturating_sub(8)).min(4);
+                    let mut bm = 0u32;
+                    for k in 0..cmax {
+                        if let Some(b) = d.u8(8 + k) {
+                            bm |= u32::from(b) << (8 * k);
+                        }
+                    }
+                    out.processing_unit_id = Some(id);
+                    out.pu_controls = bm;
+                }
                 _ => {}
             }
         }
 
-        i += bl;
+        i += d.len;
     }
 
     if found_vc { Some(out) } else { None }
