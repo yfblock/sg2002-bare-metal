@@ -47,9 +47,9 @@ impl Ep0 {
     }
 
     /// SETUP 阶段:8 字节请求拷入 EP0 DMA 窗,clean 后发出。
-    fn setup_stage(&self, setup_pkt: &[u8; 8]) -> UsbResult<()> {
+    fn setup_stage(&self, setup_packet: &[u8; 8]) -> UsbResult<()> {
         unsafe {
-            core::ptr::copy_nonoverlapping(setup_pkt.as_ptr(), dma_ptr().add(OFF_EP0), 8);
+            core::ptr::copy_nonoverlapping(setup_packet.as_ptr(), dma_ptr().add(OFF_EP0), 8);
             cache::dcache_clean_for_dma(dma_ptr().add(OFF_EP0), 8);
             Channel::CONTROL.xfer(
                 self.hcchar(false),
@@ -158,8 +158,8 @@ impl Ep0 {
     }
 
     /// 无数据阶段控制传输：`SETUP` + `STATUS` IN（零长度）。
-    pub fn write_no_data(&self, setup_pkt: [u8; 8]) -> UsbResult<()> {
-        self.setup_stage(&setup_pkt)?;
+    pub fn write_no_data(&self, setup_packet: [u8; 8]) -> UsbResult<()> {
+        self.setup_stage(&setup_packet)?;
         self.status_stage(true)
     }
 
@@ -168,13 +168,13 @@ impl Ep0 {
     /// 适用于 Hub 描述符、配置前缀、`GET_PORT_STATUS`、UVC 配置描述符 / PROBE-COMMIT 等。
     ///
     /// # 参数
-    /// - `setup_pkt`：8 字节 SETUP（`wLength` 应等于 `out.len()` 的期望读长）。
+    /// - `setup_packet`：8 字节 SETUP（`wLength` 应等于 `out.len()` 的期望读长）。
     /// - `out`：接收缓冲区，长度须与 SETUP 中 `wLength` 一致且在 `(0,4096]`。
-    pub fn read(&self, setup_pkt: [u8; 8], out: &mut [u8]) -> UsbResult<()> {
+    pub fn read(&self, setup_packet: [u8; 8], out: &mut [u8]) -> UsbResult<()> {
         if out.is_empty() || out.len() > 4096 {
             return Err(UsbError::Protocol("bad ep0 read len"));
         }
-        self.setup_stage(&setup_pkt)?;
+        self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(true); // IN 数据段:管道方向恒定,循环外组装
         // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
         let mut data1 = true;
@@ -205,13 +205,13 @@ impl Ep0 {
     /// 控制写：`SETUP` + `DATA` OUT（可多包）+ `STATUS` IN（ZLP）。
     ///
     /// # 参数
-    /// - `setup_pkt`：8 字节 SETUP（`wLength` 应等于 `data.len()`）。
+    /// - `setup_packet`：8 字节 SETUP（`wLength` 应等于 `data.len()`）。
     /// - `data`：OUT 数据阶段负载（最大 4096 字节）。
-    pub fn write(&self, setup_pkt: [u8; 8], data: &[u8]) -> UsbResult<()> {
+    pub fn write(&self, setup_packet: [u8; 8], data: &[u8]) -> UsbResult<()> {
         if data.len() > 4096 {
             return Err(UsbError::Protocol("bad ep0 write data len"));
         }
-        self.setup_stage(&setup_pkt)?;
+        self.setup_stage(&setup_packet)?;
         let hc = self.hcchar(false); // OUT 数据段:管道方向恒定,循环外组装
         // 控制传输数据阶段:首包 DATA1,随后 DATA1/DATA0 交替(数据切换)。
         let mut data1 = true;
