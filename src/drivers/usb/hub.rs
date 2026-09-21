@@ -155,7 +155,7 @@ impl Hub for RootHub {
     }
 
     fn reset_port(&self, _port: u8) -> UsbResult<()> {
-        Ok(dwc2::dwc2_host_root_bus_reset_pulse())
+        Ok(dwc2::port_reset_pulse())
     }
 
     fn clear_connection_change(&self, _port: u8) -> UsbResult<()> {

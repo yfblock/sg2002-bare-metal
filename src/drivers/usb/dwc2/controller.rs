@@ -105,7 +105,10 @@ fn hprt0_port(pwr: bool, rst: bool) {
     );
 }
 
-fn port_reset_pulse() {
+/// 在已检测到设备连接后发出 **USB 总线复位**（应在 `CONNSTS==1` 之后调用，符合主机枚举顺序）。
+///
+/// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
+pub fn port_reset_pulse() {
     // USB 2.0 spec TDRSTR (root hub reset) min = 50ms（实测 cv182x 的 PHY chirp K/J
     // 必须在 PRTRST 期间完成，不够长 chirp 不会发生，HPRT0.SPD 只能停在 FS）。
     // 这里给到 ≥60ms 留余量，并保留 PWR；CONNDET 若是 pending 先写 1 清掉。
@@ -121,12 +124,6 @@ fn port_reset_pulse() {
     delay(Duration::from_millis(80)); // TRSTRCY 80ms
 }
 
-/// 在已检测到设备连接后发出 **USB 总线复位**（应在 `CONNSTS==1` 之后调用，符合主机枚举顺序）。
-///
-/// 会先对 `CONNDET` 做写 1 清除（若置位），再拉 `PRTRST`。
-pub fn dwc2_host_root_bus_reset_pulse() {
-    port_reset_pulse();
-}
 
 // CV182x / SG2002 主机（Linux `dwc2_set_cv182x_params` + `dwc2_core_host_init`）
 
@@ -260,9 +257,9 @@ fn cv182x_usb2_phy_host_clear_utmi_override() {
 
 /// M1：软复位、强制 Host、FIFO、GAHB、HCFG、根口上电（及 CV182x PHY 下拉）。
 ///
-/// **不在此处** 发 USB 总线复位：应在确认 [`hprt0`] 的 `CONNSTS` 后调用 [`dwc2_host_root_bus_reset_pulse`]。
+/// **不在此处** 发 USB 总线复位：应在确认 HPRT0 的 `CONNSTS` 后调用 [`port_reset_pulse`]。
 ///
-/// 成功返回 Ok，不保证已有设备连接；请读 [`hprt0`] 的 `CONNSTS`。
+/// 成功返回 Ok，不保证已有设备连接；请读 HPRT0 的 `CONNSTS`。
 pub fn dwc2_host_init() -> UsbResult<()> {
     let dwc2 = usb::dwc2_regs();
     dwc2.gintmsk.set(0);

@@ -6,7 +6,7 @@ use tock_registers::interfaces::Readable;
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use super::regs::HCINT;
-use super::ch::{Channel, hctsiz, next_uframe_oddfrm};
+use super::ch::{Channel, next_uframe_oddfrm};
 use super::regs::{HCCHAR, HCTSIZ};
 use super::dma::{dma_ptr, UVC_BULK_DMA_CAP};
 use tock_registers::fields::FieldValue;
@@ -89,7 +89,7 @@ impl IsochInEp {
         let pktcnt = mult;
 
         unsafe {
-            let tsiz = hctsiz(pid, pktcnt, xfersize);
+            let tsiz = pid + HCTSIZ::PKTCNT.val(pktcnt) + HCTSIZ::XFERSIZE.val(xfersize);
             let oddfrm = next_uframe_oddfrm();
 
             let ch = Channel::VIDEO;
