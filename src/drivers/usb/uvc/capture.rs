@@ -5,7 +5,7 @@ use crate::drivers::usb::error::{UsbError, UsbResult};
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::dwc2::{DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 
-use super::descriptor::UvcStreamSelection;
+use super::session::UvcCamera;
 
 /// 单微帧 RX 工作区大小：HS Isoch 单微帧最多 1024×3=3072 字节，4096 已够用；
 /// 其余缓冲全部留给拼接 JPEG。
@@ -133,58 +133,60 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
     Ok(false)
 }
 
-/// 抓一帧（视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`]）。
-///
-/// **关键**：等时模式下 `mult=1` 时，每次 `IsochInEp::read_uframe` 返回的整个数据（最多 mps 字节）就是
-/// **一个完整的 USB 包 = 一个 UVC 数据包**（带 12 字节头），**不可再切分**。
-pub fn uvc_capture_one_frame(ep0: &dwc2::Ep0, sel: &UvcStreamSelection) -> UsbResult<usize> {
-    let iso = dwc2::IsochInEp::new(ep0.dev(), sel.ep_num, sel.mps_raw);
-    let mps_low = dwc2::wmax_mps(sel.mps_raw).max(1) as usize;
-    let mult = dwc2::wmax_mult(sel.mps_raw).clamp(1, 3) as usize;
-    let jpeg_cap = UVC_BULK_DMA_CAP.saturating_sub(UVC_WORK_AREA_BYTES);
-    let mut jpeg_len = 0usize;
-    let mut transfers = 0u32;
-    let mut data_transfers = 0u32;
-    let work_off = DMA_OFF_UVC_BULK;
-    let prev_eof_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
-    let mut state = FrameState::WaitFirstSwitch {
-        last_fid: if prev_eof_fid <= 1 { Some(prev_eof_fid) } else { None },
-    };
-    const MAX_UFRAMES: u32 = 80_000;
-    for _ in 0..MAX_UFRAMES {
-        transfers = transfers.wrapping_add(1);
-        let actual = iso.read_uframe(work_off)?;
-        if actual == 0 {
-            continue;
-        }
-        data_transfers = data_transfers.wrapping_add(1);
-        let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
-
-        let eof = if mult == 1 {
-            process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap)?
-        } else {
-            // mult>1：一次 read_uframe 的 DMA 数据里可能含多个 USB 包，按 mps 切开逐包处理。
-            let mut hit_eof = false;
-            let mut off = 0usize;
-            while off < slice.len() {
-                let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
-                let pkt = &slice[off..end];
-                off = end;
-                if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
-                    hit_eof = true;
-                    break;
-                }
-            }
-            hit_eof
+impl UvcCamera {
+    /// 抓一帧（视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`]）。
+    ///
+    /// **关键**：等时模式下 `mult=1` 时，每次 `IsochInEp::read_uframe` 返回的整个数据（最多 mps 字节）就是
+    /// **一个完整的 USB 包 = 一个 UVC 数据包**（带 12 字节头），**不可再切分**。
+    pub fn capture_frame(&self) -> UsbResult<usize> {
+        let iso = dwc2::IsochInEp::new(self.ep0.dev(), self.sel.ep_num, self.sel.mps_raw);
+        let mps_low = dwc2::wmax_mps(self.sel.mps_raw).max(1) as usize;
+        let mult = dwc2::wmax_mult(self.sel.mps_raw).clamp(1, 3) as usize;
+        let jpeg_cap = UVC_BULK_DMA_CAP.saturating_sub(UVC_WORK_AREA_BYTES);
+        let mut jpeg_len = 0usize;
+        let mut transfers = 0u32;
+        let mut data_transfers = 0u32;
+        let work_off = DMA_OFF_UVC_BULK;
+        let prev_eof_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
+        let mut state = FrameState::WaitFirstSwitch {
+            last_fid: if prev_eof_fid <= 1 { Some(prev_eof_fid) } else { None },
         };
-        if eof {
-            if let FrameState::Capturing { frame_fid, .. } = state {
-                LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+        const MAX_UFRAMES: u32 = 80_000;
+        for _ in 0..MAX_UFRAMES {
+            transfers = transfers.wrapping_add(1);
+            let actual = iso.read_uframe(work_off)?;
+            if actual == 0 {
+                continue;
             }
-            return Ok(jpeg_len);
+            data_transfers = data_transfers.wrapping_add(1);
+            let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
+
+            let eof = if mult == 1 {
+                process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap)?
+            } else {
+                // mult>1：一次 read_uframe 的 DMA 数据里可能含多个 USB 包，按 mps 切开逐包处理。
+                let mut hit_eof = false;
+                let mut off = 0usize;
+                while off < slice.len() {
+                    let end = if slice.len() - off >= mps_low { off + mps_low } else { slice.len() };
+                    let pkt = &slice[off..end];
+                    off = end;
+                    if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
+                        hit_eof = true;
+                        break;
+                    }
+                }
+                hit_eof
+            };
+            if eof {
+                if let FrameState::Capturing { frame_fid, .. } = state {
+                    LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+                }
+                return Ok(jpeg_len);
+            }
         }
+        log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
+            transfers, data_transfers, jpeg_len, mult);
+        Err(UsbError::Timeout)
     }
-    log::info!("UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
-        transfers, data_transfers, jpeg_len, mult);
-    Err(UsbError::Timeout)
 }

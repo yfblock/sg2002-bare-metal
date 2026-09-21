@@ -10,7 +10,6 @@ use crate::drivers::usb::device::UsbDevice;
 use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{self, UvcStreamSelection};
-use super::capture;
 use super::{control, stream};
 use crate::drivers::usb::dwc2::Ep0;
 
@@ -18,8 +17,8 @@ use crate::drivers::usb::dwc2::Ep0;
 ///
 /// 抓帧走 [`capture_frame`]；构造见 [`open`]。
 pub struct UvcCamera {
-    ep0: Ep0,
-    sel: UvcStreamSelection,
+    pub(crate) ep0: Ep0,
+    pub(crate) sel: UvcStreamSelection,
 }
 
 /// 打开摄像头会话（读配置描述符 → 解析 → 调校 → PROBE/COMMIT → 启动）。
@@ -44,14 +43,8 @@ pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera
     }
 
     stream::uvc_start_video_stream(&ep0, &mut sel)?;
-    let _ = capture::uvc_capture_one_frame(&ep0, &sel); // warmup:丢弃首帧
 
-    Ok(UvcCamera { ep0, sel })
-}
-
-impl UvcCamera {
-    /// 抓一帧 MJPEG，返回帧长（字节）。
-    pub fn capture_frame(&self) -> UsbResult<usize> {
-        capture::uvc_capture_one_frame(&self.ep0, &self.sel)
-    }
+    let camera = UvcCamera { ep0, sel };
+    let _ = camera.capture_frame(); // warmup:丢弃首帧
+    Ok(camera)
 }
