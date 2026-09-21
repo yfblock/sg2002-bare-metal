@@ -10,13 +10,13 @@ use crate::drivers::usb::device::UsbDevice;
 use crate::drivers::usb::error::UsbResult;
 
 use super::descriptor::{self, UvcStreamSelection};
-use crate::drivers::usb::dwc2::Ep0;
+use crate::drivers::usb::dwc2::ControlEp;
 
 /// 已建立的 UVC 摄像头会话：设备 + 选定的流参数。
 ///
 /// 抓帧走 [`capture_frame`]；构造见 [`open`]。
 pub struct UvcCamera {
-    pub(crate) ep0: Ep0,
+    pub(crate) ep0: ControlEp,
     pub(crate) sel: UvcStreamSelection,
     /// VC 实体 ID 与 bmControls(控制请求的寻址材料;运行期调参可用)。
     pub(crate) entities: descriptor::UvcControlEntities,

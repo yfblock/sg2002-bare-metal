@@ -21,7 +21,7 @@ pub mod dma;
 pub mod isoch;
 pub mod regs;
 
-pub use control::Ep0;
+pub use control::ControlEp;
 pub use controller::{dwc2_host_init, hprt0_port, port_reset_pulse};
 pub use dma::{dma_rx_slice, dma_write_at, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 pub use isoch::{wmax_mps, wmax_mult, wmax_payload_per_uframe, IsochInEp};

@@ -12,7 +12,7 @@ use core::time::Duration;
 use tock_registers::interfaces::{ReadWriteable, Readable};
 
 use super::device::{enumerate_device, UsbDevice, DRIVERS};
-use super::dwc2::{self, regs::HPRT0, Ep0};
+use super::dwc2::{self, regs::HPRT0, ControlEp};
 use super::error::{UsbError, UsbResult};
 
 // ---- 总线遍历(topology 并入;Linux hub.c 模型:hub 驱动拥有枚举) ----
@@ -222,10 +222,10 @@ impl Hub for RootHub {
 /// Hub 描述符 `bNbrPorts` 上限（防描述符异常值撑爆遍历）。
 const MAX_HUB_PORTS: u8 = 16;
 
-/// 外部 hub：持有已寻址设备的 [`dwc2::Ep0`]（Copy 值，随本句柄走）与其
+/// 外部 hub：持有已寻址设备的 [`dwc2::ControlEp`]（Copy 值，随本句柄走）与其
 /// 描述符信息。
 pub struct DeviceHub {
-    ep0: Ep0,
+    ep0: ControlEp,
     nports: u8,
     /// `bPwrOn2PwrGood` 已换算的毫秒数。
     pwr_on_pwr_good_ms: u32,
@@ -233,7 +233,7 @@ pub struct DeviceHub {
 
 impl DeviceHub {
     /// `GET_DESCRIPTOR(Hub)` 读描述符并绑定。
-    pub fn new(ep0: Ep0) -> UsbResult<Self> {
+    pub fn new(ep0: ControlEp) -> UsbResult<Self> {
         let mut buf = [0u8; 64];
         ep0.read(hub_setup(HubRequest::GetHubDescriptor(64)), &mut buf)?;
         if buf[0] < 7 || buf[1] != USB_DT_HUB {

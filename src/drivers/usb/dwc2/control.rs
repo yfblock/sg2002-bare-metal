@@ -1,4 +1,4 @@
-//! EP0 控制传输：`Ep0` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
+//! EP0 控制传输：`ControlEp` 端点句柄（绑定设备地址 + EP0 包长）+ 标准请求
 //! （SET_ADDRESS / SET_CONFIGURATION / 设备描述符）与 Hub 端口请求包装，全部走通道 0。
 
 use super::channel::Channel;
@@ -12,7 +12,7 @@ use tock_registers::fields::FieldValue;
 /// EP0 控制端点句柄：把控制传输的公共前置参数（设备地址、EP0 最大包长）
 /// 绑定为端点自身状态。
 #[derive(Clone, Copy)]
-pub struct Ep0 {
+pub struct ControlEp {
     dev: u32,
     mps: u32,
 }
@@ -50,7 +50,7 @@ impl<'a> DeviceDescriptor<'a> {
     }
 }
 
-impl Ep0 {
+impl ControlEp {
     /// 绑定一台已寻址设备的 EP0。
     ///
     /// # 参数
@@ -111,7 +111,7 @@ impl Ep0 {
     /// `(vid, pid, ep0_mps, b_device_class)`，均在设备描述符前 18 字节内解析。
     pub fn probe_default_addr() -> UsbResult<(u16, u16, u32, u8)> {
         // 默认地址 0 阶段的临时句柄(MPS 固定 64,USB 2.0 枚举惯例)。
-        let ep0 = Ep0 { dev: 0, mps: 64 };
+        let ep0 = ControlEp { dev: 0, mps: 64 };
         // wLength = 18:设备描述符规范全长。
         let w_length: u16 = 18;
         ep0.setup_stage(&std_setup(StdRequest::GetDescriptorDevice))?;
@@ -141,16 +141,16 @@ impl Ep0 {
         ))
     }
 
-    /// 在默认地址 0 上发送 `SET_ADDRESS`（须在 [`Ep0::new`] 建立句柄之前）。
+    /// 在默认地址 0 上发送 `SET_ADDRESS`（须在 [`ControlEp::new`] 建立句柄之前）。
     ///
-    /// 存在理由不止命名:Ep0 字段私有,`dev:0` 的临时构造只在本模块合法——
+    /// 存在理由不止命名:ControlEp 字段私有,`dev:0` 的临时构造只在本模块合法——
     /// 本方法是「在默认地址上说话」的唯一许可通道(封装出口)。
     ///
     /// # 参数
     /// - `addr`：设备新地址，合法 **1..=127**。
     /// - `ep0_mps`：地址 0 阶段使用的 EP0 MPS（枚举首步常用 64）。
     pub fn set_address(addr: u8, ep0_mps: u32) -> UsbResult<()> {
-        Ep0::new(0, ep0_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
+        ControlEp::new(0, ep0_mps).write_no_data(std_setup(StdRequest::SetAddress(addr)))
     }
 
     /// 对已寻址设备发送 `SET_CONFIGURATION`。

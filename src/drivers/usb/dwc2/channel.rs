@@ -16,7 +16,7 @@ pub(crate) const HCINT_ALL_W1C: u32 = 0x7FF;
 pub(crate) type HcintSnapshot = LocalRegisterCopy<u32, HCINT::Register>;
 
 /// 主机通道句柄：绑定通道索引。约定 **0 = EP0 控制**、**1 = Isoch 视频**
-/// ——「一条端点 ↔ 一个硬件通道」由端点句柄（[`super::Ep0`] / [`super::IsochInEp`]）
+/// ——「一条端点 ↔ 一个硬件通道」由端点句柄（[`super::ControlEp`] / [`super::IsochInEp`]）
 /// 通过 [`Channel::CONTROL`] / [`Channel::VIDEO`] 选定。
 #[derive(Clone, Copy)]
 pub struct Channel(u32);

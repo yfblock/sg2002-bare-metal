@@ -1,6 +1,6 @@
 //! UVC 配置描述符读取与解析：VS 流（格式/帧/等时端点候选，含选流打分与
 //! interval 选择）与 VC 实体（CameraTerminal / ProcessingUnit）。
-//! 配置描述符经 [`Ep0::get_configuration_descriptor`](crate::drivers::usb::dwc2::Ep0)
+//! 配置描述符经 [`ControlEp::get_configuration_descriptor`](crate::drivers::usb::dwc2::ControlEp)
 //! 读回,其余为纯解析。
 //! UVC `dwFrameInterval` 线上为 100ns tick 的 u32;域内统一 [`Duration`],
 //! 仅在边界换算。
