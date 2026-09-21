@@ -20,4 +20,4 @@ pub mod stream;
 // 重导出仅保留跨模块消费项:会话门面 + DMA 偏移(main 取 JPEG 切片用) + 选流偏好。
 pub use capture::UVC_ASSEMBLED_JPEG_DMA_OFF;
 pub use descriptor::UvcPrefs;
-pub use session::{open, UvcCamera};
+pub use session::UvcCamera;

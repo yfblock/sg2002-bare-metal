@@ -3,7 +3,7 @@
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::error::UsbResult;
 
-use super::descriptor::{reselect_isoch_alt_for_payload, to_uvc_ticks, UvcStreamSelection};
+use super::descriptor::{to_uvc_ticks, UvcStreamSelection};
 use super::session::UvcCamera;
 use super::setup::UvcRequest;
 
@@ -110,7 +110,7 @@ impl UvcCamera {
             u32::from_le_bytes([probe[18], probe[19], probe[20], probe[21]]);
 
         // 根据协商出的 dwMaxPayloadTransferSize 重新选 Isoch alt。
-        reselect_isoch_alt_for_payload(sel);
+        sel.reselect_isoch_alt_for_payload();
 
         // 若 reselect 降级到了更低带宽的 alt（例如 mult=1），须把 COMMIT 中的
         // dwMaxPayloadTransferSize 压到该 alt 的实际每微帧吞吐，否则摄像头

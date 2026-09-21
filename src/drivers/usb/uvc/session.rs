@@ -28,26 +28,30 @@ pub struct UvcCamera {
 /// - `dev`：枚举得到的 UVC 设备——**按值移交**：会话消费设备(取其 EP0),
 ///   调用方此后不再使用该句柄。
 /// - `prefs`：选流偏好（帧尺寸/帧率）。
-pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<UvcCamera> {
-    let control_ep = dev.control_ep;
+impl UvcCamera {
+    /// 打开摄像头会话:构造 `open` 的关联工厂形态——读配置描述符 → 解析
+    /// → 调校 → PROBE/COMMIT → 启动 → warmup。
+    pub fn open(dev: UsbDevice, prefs: &descriptor::UvcPrefs) -> UsbResult<Self> {
+        let control_ep = dev.control_ep;
 
-    // 配置描述符 → 有效切片(wTotalLength 截断)
-    let cfg_buf = control_ep.get_configuration_descriptor(1)?;
-    let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
-    let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
+        // 配置描述符 → 有效切片(wTotalLength 截断)
+        let cfg_buf = control_ep.get_configuration_descriptor(1)?;
+        let cfg_total = u16::from_le_bytes([cfg_buf[2], cfg_buf[3]]) as usize;
+        let cfg = &cfg_buf[..cfg_total.min(cfg_buf.len())];
 
-    let sel = descriptor::parse_uvc_video_stream(cfg, cfg_total, prefs)?;
-    let entities = descriptor::parse_uvc_control_entities(cfg, cfg_total).unwrap_or_default();
+        let sel = descriptor::parse_uvc_video_stream(cfg, cfg_total, prefs)?;
+        let entities = descriptor::parse_uvc_control_entities(cfg, cfg_total).unwrap_or_default();
 
-    // 早构造:后续步骤(调校/开流/warmup)全部是会话方法。
-    let mut camera = UvcCamera {
-        control_ep,
-        sel,
-        entities,
-    };
-    // 相机调校(自动白平衡/50Hz/AE;失败不阻塞——按出厂默认继续)
-    let _ = camera.init_controls();
-    camera.start_stream()?;
-    let _ = camera.capture_frame(); // warmup:丢弃首帧
-    Ok(camera)
+        // 早构造:后续步骤(调校/开流/warmup)全部是会话方法。
+        let mut camera = UvcCamera {
+            control_ep,
+            sel,
+            entities,
+        };
+        // 相机调校(自动白平衡/50Hz/AE;失败不阻塞——按出厂默认继续)
+        let _ = camera.init_controls();
+        camera.start_stream()?;
+        let _ = camera.capture_frame(); // warmup:丢弃首帧
+        Ok(camera)
+    }
 }

@@ -11,7 +11,7 @@ use core::time::Duration;
 
 use tock_registers::interfaces::{ReadWriteable, Readable};
 
-use super::device::{enumerate_device, UsbDevice, DRIVERS};
+use super::device::{UsbDevice, DRIVERS};
 use super::dwc2::{self, regs::HPRT0, ControlEp};
 use super::error::{UsbError, UsbResult};
 
@@ -121,7 +121,7 @@ pub trait Hub {
         let speed = PortSpeed::from_status(after);
         log::info!(target: LOG_TARGET, "[USB] port {} enabled w0={:#06x} SPD={}",
             port, after, speed.as_str());
-        Ok(enumerate_device(speed, next_addr)?)
+        Ok(UsbDevice::enumerate(speed, next_addr)?)
     }
 
     /// **树遍历**(Linux hub.c 模型):供电 → 等稳定 → 逐口取子设备

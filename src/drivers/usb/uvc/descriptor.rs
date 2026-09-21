@@ -486,60 +486,62 @@ pub(crate) fn parse_uvc_video_stream(
 /// 根据 PROBE/COMMIT 协商出的 `payload_per_uframe`，从所有 Isoch alt 候选中挑出
 /// **总带宽 ≥ payload** 且**最小**的那一个；找不到则取带宽最大的。
 ///
-/// 找到后更新 `sel.alt_setting` 和 `sel.mps_raw`。
+/// 找到后更新 `self.alt_setting` 和 `self.mps_raw`。
 ///
 /// **DWC2 兼容性**：SG2002 等低端 DWC2 不可靠支持 HS 高带宽 Isoch（mult > 1），
 /// 传输能完成但数据内容错误。因此只考虑 mult=1 的候选；若设备协商的 payload
 /// 超过 mult=1 最大带宽，仍选最大 mult=1 alt——摄像头会自适应降低每微帧吞吐，
 /// 帧传输耗时更长但数据正确。
-pub(crate) fn reselect_isoch_alt_for_payload(sel: &mut UvcStreamSelection) {
-    if sel.isoch_alts_count == 0 {
-        return;
-    }
-    let need = sel.negotiated_payload_size;
-    if need == 0 {
-        return;
-    }
-    let alts = &sel.isoch_alts[..sel.isoch_alts_count as usize];
-    let mut best_fit: Option<(u8, u16, u32)> = None;
-    let mut best_max: Option<(u8, u16, u32)> = None;
-    // **DWC2 兼容性**：SG2002 等低端 DWC2 不可靠支持 HS 高带宽 Isoch（mult > 1），
-    // 传输能完成但数据内容错误——只考虑 mult=1 候选；若设备协商的 payload 超过
-    // mult=1 最大带宽，仍选最大 alt，摄像头会自适应降低每微帧吞吐（帧传输
-    // 耗时更长但数据正确）。
-    for &(alt, mps_raw) in alts {
-        let mps = dwc2::wmax_mps(mps_raw);
-        let mult = dwc2::wmax_mult(mps_raw);
-        if mult > 1 {
-            continue;
+impl UvcStreamSelection {
+    pub(crate) fn reselect_isoch_alt_for_payload(&mut self) {
+        if self.isoch_alts_count == 0 {
+            return;
         }
-        let total = mps * mult;
-        if total >= need {
+        let need = self.negotiated_payload_size;
+        if need == 0 {
+            return;
+        }
+        let alts = &self.isoch_alts[..self.isoch_alts_count as usize];
+        let mut best_fit: Option<(u8, u16, u32)> = None;
+        let mut best_max: Option<(u8, u16, u32)> = None;
+        // **DWC2 兼容性**：SG2002 等低端 DWC2 不可靠支持 HS 高带宽 Isoch（mult > 1），
+        // 传输能完成但数据内容错误——只考虑 mult=1 候选；若设备协商的 payload 超过
+        // mult=1 最大带宽，仍选最大 alt，摄像头会自适应降低每微帧吞吐（帧传输
+        // 耗时更长但数据正确）。
+        for &(alt, mps_raw) in alts {
+            let mps = dwc2::wmax_mps(mps_raw);
+            let mult = dwc2::wmax_mult(mps_raw);
+            if mult > 1 {
+                continue;
+            }
+            let total = mps * mult;
+            if total >= need {
+                let pick = (alt, mps_raw, total);
+                best_fit = Some(match best_fit {
+                    None => pick,
+                    Some(p) if p.2 > total => pick,
+                    Some(p) => p,
+                });
+            }
             let pick = (alt, mps_raw, total);
-            best_fit = Some(match best_fit {
+            best_max = Some(match best_max {
                 None => pick,
-                Some(p) if p.2 > total => pick,
+                Some(p) if p.2 < total => pick,
                 Some(p) => p,
             });
         }
-        let pick = (alt, mps_raw, total);
-        best_max = Some(match best_max {
-            None => pick,
-            Some(p) if p.2 < total => pick,
-            Some(p) => p,
-        });
-    }
-    let (new_alt, new_mps_raw, new_total) =
-        best_fit
-            .or(best_max)
-            .unwrap_or((sel.alt_setting, sel.mps_raw, 0));
-    if new_alt != sel.alt_setting || new_mps_raw != sel.mps_raw {
-        log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
-            sel.alt_setting, sel.mps_raw,
-            dwc2::wmax_payload_per_uframe(sel.mps_raw),
-            new_alt, new_mps_raw, new_total, need);
-        sel.alt_setting = new_alt;
-        sel.mps_raw = new_mps_raw;
+        let (new_alt, new_mps_raw, new_total) =
+            best_fit
+                .or(best_max)
+                .unwrap_or((self.alt_setting, self.mps_raw, 0));
+        if new_alt != self.alt_setting || new_mps_raw != self.mps_raw {
+            log::info!("UVC: re-select Isoch alt {} (mps_raw={:#06x}, {} B/uframe) -> alt {} (mps_raw={:#06x}, {} B/uframe) for payload={}",
+                self.alt_setting, self.mps_raw,
+                dwc2::wmax_payload_per_uframe(self.mps_raw),
+                new_alt, new_mps_raw, new_total, need);
+            self.alt_setting = new_alt;
+            self.mps_raw = new_mps_raw;
+        }
     }
 }
 

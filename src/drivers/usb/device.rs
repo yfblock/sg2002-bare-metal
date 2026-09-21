@@ -36,58 +36,39 @@ pub struct UsbDevice {
 }
 
 impl UsbDevice {
+    /// 公共枚举序列（在默认地址 0 上）：探测 → `SET_ADDRESS` → `SET_CONFIGURATION`
+    /// → 读首接口类，产出完整设备身份。hub 与功能设备共用。
+    pub(crate) fn enumerate(speed: PortSpeed, next_addr: &mut u8) -> UsbResult<Self> {
+        let (vid, pid, control_ep_mps, dev_class) = ControlEp::probe_default_addr()?;
+        let addr = *next_addr;
+        if addr >= MAX_USB_ADDR {
+            return Err(UsbError::Protocol("usb address space full"));
+        }
+        *next_addr = addr.saturating_add(1);
+        // 默认地址句柄上发 SET_ADDRESS,成功后句柄自身迁移到新地址。
+        let mut control_ep = ControlEp::new(control_ep_mps);
+        control_ep.set_address(addr)?;
+        // SET_ADDRESS 后恢复延时:USB 2.0 要求下一事务前用新地址;Linux 主机栈
+        // 常用 ~10ms,这里给 50ms 富余(原迭代计数版按 1GHz 校准,25MHz 上
+        // 实测 ~27s 纯属过杀)。
+        crate::arch::time::delay(core::time::Duration::from_millis(50));
+        control_ep.set_configuration(1)?;
+        let iface_class = control_ep.first_interface_class().unwrap_or(0);
+        Ok(UsbDevice {
+            control_ep,
+            vid,
+            pid,
+            dev_class,
+            iface_class,
+            speed,
+        })
+    }
+
     /// 是否 hub（类码 0x09 或 QEMU 虚拟 hub VID:PID）。
     pub fn is_hub(&self) -> bool {
         self.dev_class == USB_CLASS_HUB
             || (self.vid == QEMU_USB_HUB_VID && self.pid == QEMU_USB_HUB_PID)
     }
-}
-
-/// 公共枚举序列（在默认地址 0 上）：探测 → `SET_ADDRESS` → `SET_CONFIGURATION`
-/// → 读首接口类，产出完整设备身份。hub 与功能设备共用。
-pub(crate) fn enumerate_device(speed: PortSpeed, next_addr: &mut u8) -> UsbResult<UsbDevice> {
-    let (vid, pid, control_ep_mps, dev_class) = ControlEp::probe_default_addr()?;
-    let addr = *next_addr;
-    if addr >= MAX_USB_ADDR {
-        return Err(UsbError::Protocol("usb address space full"));
-    }
-    *next_addr = addr.saturating_add(1);
-    // 默认地址句柄上发 SET_ADDRESS,成功后句柄自身迁移到新地址。
-    let mut control_ep = ControlEp::new(control_ep_mps);
-    control_ep.set_address(addr)?;
-    // SET_ADDRESS 后恢复延时:USB 2.0 要求下一事务前用新地址;Linux 主机栈
-    // 常用 ~10ms,这里给 50ms 富余(原迭代计数版按 1GHz 校准,25MHz 上
-    // 实测 ~27s 纯属过杀)。
-    crate::arch::time::delay(core::time::Duration::from_millis(50));
-    control_ep.set_configuration(1)?;
-    let iface_class = first_interface_class(&control_ep).unwrap_or(0);
-    Ok(UsbDevice {
-        control_ep,
-        vid,
-        pid,
-        dev_class,
-        iface_class,
-        speed,
-    })
-}
-
-/// 读配置描述符首接口的 `bInterfaceClass`。
-fn first_interface_class(ep: &ControlEp) -> UsbResult<u8> {
-    let mut buf = [0u8; 64];
-    ep.read(StdRequest::get_descriptor_configuration(0, 64), &mut buf)?;
-    let mut i: usize = 0;
-    while i + 2 <= buf.len() {
-        let bl = buf[i] as usize;
-        if bl < 2 {
-            break;
-        }
-        let ty = buf[i + 1];
-        if ty == USB_DT_INTERFACE && i + 6 <= buf.len() {
-            return Ok(buf[i + 5]);
-        }
-        i = i.saturating_add(bl);
-    }
-    Ok(0)
 }
 
 /// 类驱动：声明对已枚举功能设备的匹配条件。
@@ -119,3 +100,24 @@ impl DeviceDriver for UvcCameraDriver {
 pub(crate) static DRIVERS: &[&dyn DeviceDriver] = &[&UvcCameraDriver];
 
 // SAFETY 补充见上
+
+impl ControlEp {
+    /// 读配置描述符首接口的 `bInterfaceClass`。
+    fn first_interface_class(&self) -> UsbResult<u8> {
+        let mut buf = [0u8; 64];
+        self.read(StdRequest::get_descriptor_configuration(0, 64), &mut buf)?;
+        let mut i: usize = 0;
+        while i + 2 <= buf.len() {
+            let bl = buf[i] as usize;
+            if bl < 2 {
+                break;
+            }
+            let ty = buf[i + 1];
+            if ty == USB_DT_INTERFACE && i + 6 <= buf.len() {
+                return Ok(buf[i + 5]);
+            }
+            i = i.saturating_add(bl);
+        }
+        Ok(0)
+    }
+}
