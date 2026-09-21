@@ -3,7 +3,7 @@
 //! [`connect_reset_sequence`]）对两种上游无差别——多态调用点真实存在。
 //!
 //! 状态统一为 USB 2.0 §11.24.2 `wPortStatus` word0 布局（根口现场转换，
-//! Linux `dwc2_hcd_hub_control` 同款做法）。总线枚举（[`enumerate_bus`] /
+//! Linux `dwc2_hcd_hub_control` 同款做法）。总线枚举（[`RootHub::enumerate_bus`] /
 //! [`Hub::walk_subtree`]/[`dispatch_device`]）也在本模块——Linux hub.c 模型:
 //! hub 驱动拥有树遍历与设备分派。
 
@@ -247,6 +247,37 @@ impl DeviceHub {
     }
 }
 
+impl RootHub {
+/// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
+/// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
+/// 上下文的硬错误)。
+pub fn enumerate_bus(&self) -> UsbResult<UsbDevice> {
+    log::info!(
+        "[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
+    );
+
+    self.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
+    if !self.wait_connect(1, Duration::from_secs(5)) {
+        return Err(UsbError::Hardware(
+            "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
+        ));
+    }
+    let mut next_addr: u8 = 1;
+    let child = self
+            .enumerate_child(1, &mut next_addr)
+        .map_err(|e| match e {
+            UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
+            e => e,
+        })?;
+    log::info!("[USB] bus: scan finished.");
+    dispatch_device(child, &mut next_addr).map_err(|e| match e {
+        UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
+        e => e,
+    })
+}
+
+}
+
 impl Hub for DeviceHub {
     fn nports(&self) -> u8 {
         self.nports
@@ -395,30 +426,3 @@ fn dispatch_device(dev: UsbDevice, next_addr: &mut u8) -> UsbResult<UsbDevice> {
     }
 }
 
-/// 树遍历整条总线：根口上电 → 等连接 → 取根口子设备 → 分派;返回被类驱动
-/// 接管的设备;根口无设备/无人接管 = `Err`(根级把 NotPresent 升格为带
-/// 上下文的硬错误)。
-pub fn enumerate_bus(root: &RootHub) -> UsbResult<UsbDevice> {
-    log::info!(
-        "[USB] bus: recursive hub scan (QEMU may insert virtual usb-hub on single root port)"
-    );
-
-    root.port_power(1)?; // HPRT0.PWR(controller bring-up 不代劳)
-    if !root.wait_connect(1, Duration::from_secs(5)) {
-        return Err(UsbError::Hardware(
-            "no device on root port (enable VBUS e.g. GPIOB6 / cable / PHY)",
-        ));
-    }
-    let mut next_addr: u8 = 1;
-    let child = root
-        .enumerate_child(1, &mut next_addr)
-        .map_err(|e| match e {
-            UsbError::NotPresent => UsbError::Protocol("root port child not enabled"),
-            e => e,
-        })?;
-    log::info!("[USB] bus: scan finished.");
-    dispatch_device(child, &mut next_addr).map_err(|e| match e {
-        UsbError::NotPresent => UsbError::Protocol("no device claimed by any class driver"),
-        e => e,
-    })
-}
