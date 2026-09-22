@@ -56,16 +56,12 @@ pub(crate) extern "C" fn rust_main() -> ! {
     logger::print("=== C906L UVC+JPU start ===\n");
 
     ipc::write(0, 0, 0);
-    logger::print("[S1] platform_init\n");
     platform::platform_init();
-    logger::print("[S2] init_interrupts\n");
     arch::trap::init_interrupts();
-    logger::print("[S3] host_init\n");
 
     // UVC 初始化(同步,一次性):主机 bring-up → 树遍历(驱动各自 probe
     // 并存好自己的设备)→ main 取用。
     dwc2::dwc2_host_init().expect("host init");
-    logger::print("[S4] set_prefs\n");
     uvc::set_prefs(uvc::UvcPrefs {
         frame_w: 640,
         frame_h: 480,

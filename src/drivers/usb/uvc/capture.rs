@@ -196,12 +196,12 @@ impl UvcCamera {
         };
         const MAX_UFRAMES: u32 = 80_000;
         for _ in 0..MAX_UFRAMES {
-            transfers = transfers.wrapping_add(1);
+            transfers += 1;
             let actual = iso.read_uframe(work_off)?;
             if actual == 0 {
                 continue;
             }
-            data_transfers = data_transfers.wrapping_add(1);
+            data_transfers += 1;
             let slice =
                 dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
