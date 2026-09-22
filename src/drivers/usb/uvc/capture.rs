@@ -190,15 +190,7 @@ impl UvcCamera {
             } else {
                 // mult>1：一次 read_uframe 的 DMA 数据里可能含多个 USB 包，按 mps 切开逐包处理。
                 let mut hit_eof = false;
-                let mut off = 0usize;
-                while off < slice.len() {
-                    let end = if slice.len() - off >= mps_low {
-                        off + mps_low
-                    } else {
-                        slice.len()
-                    };
-                    let pkt = &slice[off..end];
-                    off = end;
+                for pkt in slice.chunks(mps_low) {
                     if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
                         hit_eof = true;
                         break;
