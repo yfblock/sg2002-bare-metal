@@ -128,7 +128,7 @@ fn process_packet_capturing(
         if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
             return Ok(false);
         }
-        if jpeg_len.checked_add(payload.len()).unwrap_or(usize::MAX) > jpeg_cap {
+        if *jpeg_len + payload.len() > jpeg_cap {
             return Err(UsbError::Hardware("video assemble overflow"));
         }
         dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
