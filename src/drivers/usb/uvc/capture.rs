@@ -135,13 +135,13 @@ impl UvcCamera {
         let mut saw_data = false;
         let mut fid = frame_fid;
 
-        // 首包:刚翻转,直接追加(不进循环,消 first_done flag)。
+        // 首包:刚翻转,直接追加。首包就可能带 EOF(单包帧)。
         append(&mut jpeg_len, &mut saw_data, first.payload(), jpeg_cap)?;
+        if first.eof() && saw_data && tail_is_eoi(jpeg_len) {
+            LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
+            return Ok(jpeg_len);
+        }
         if first.eof() {
-            if saw_data && tail_is_eoi(jpeg_len) {
-                LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
-                return Ok(jpeg_len);
-            }
             return Err(UsbError::Timeout); // 单包残帧
         }
 
@@ -163,13 +163,13 @@ impl UvcCamera {
 
             append(&mut jpeg_len, &mut saw_data, p.payload(), jpeg_cap)?;
 
-            // EOF + EOI = 帧完整;EOF 无 EOI = 残帧
+            // EOF + EOI = 帧完整;EOF 无 EOI = 残帧。
+            if p.eof() && saw_data && tail_is_eoi(jpeg_len) {
+                LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
+                return Ok(jpeg_len);
+            }
             if p.eof() {
-                if saw_data && tail_is_eoi(jpeg_len) {
-                    LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
-                    return Ok(jpeg_len);
-                }
-                return Err(UsbError::Timeout); // 残帧:视为本轮超时,让调用方重试
+                return Err(UsbError::Timeout); // 残帧:视为本轮超时
             }
         }
     }
