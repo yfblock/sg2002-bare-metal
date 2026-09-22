@@ -120,7 +120,7 @@ fn process_packet_capturing(state: &mut FrameState, p: CapturingPacket<'_>) -> U
         // 第一次累积时校验 payload 必须以 SOI(`ff d8`) 开头：摄像头在帧间会插入 padding
         // packet（同一 FID 但 payload 不带 SOI），如果就这样累积下去会得到"首字节非 ff d8"
         // 的截断帧。这里跳过该 packet，等同 FID 内下一个真 SOI 开头的 packet 再开始累积。
-        if !*saw_data && (p.payload.len() < 2 || p.payload[0] != 0xff || p.payload[1] != 0xd8) {
+        if !*saw_data && !p.payload.starts_with(&[0xff, 0xd8]) {
             return Ok(false);
         }
         if p.jpeg_len
