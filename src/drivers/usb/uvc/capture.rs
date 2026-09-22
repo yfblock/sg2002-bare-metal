@@ -14,7 +14,6 @@ pub const UVC_WORK_AREA_BYTES: usize = 4096;
 pub const UVC_ASSEMBLED_JPEG_DMA_OFF: usize = DMA_OFF_UVC_BULK + UVC_WORK_AREA_BYTES;
 
 /// 上限次数(等翻转 + 攒帧各 80k 微帧,共 ~160ms × 2)。
-const MAX_UFRAMES: u32 = 80_000;
 
 /// UVC 数据包(等时 IN 负载)的视图:`bLength@0` + `bInfo@1` + 负载 `@hlen..`。
 struct UvcPacket<'a> {
@@ -84,21 +83,6 @@ fn append(
     Ok(())
 }
 
-/// 读一个包(跳过空微帧和头非法的)。超时返回 Err。
-fn read_packet(iso: &IsochInEp, work_off: usize) -> UsbResult<UvcPacket<'_>> {
-    for _ in 0..MAX_UFRAMES {
-        let actual = iso.read_uframe(work_off)?;
-        if actual == 0 {
-            continue;
-        }
-        let slice = dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
-        if let Some(p) = UvcPacket::new(slice) {
-            return Ok(p);
-        }
-    }
-    Err(UsbError::Timeout)
-}
-
 impl UvcCamera {
     /// 抓一帧(视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`])。
     ///
@@ -135,7 +119,8 @@ impl UvcCamera {
         // ── 阶段1:等 FID 翻转──
         let mut prev_fid = init_fid;
         let first = loop {
-            let p = read_packet(iso, work_off)?;
+            let p = UvcPacket::new(iso.read_payload(work_off)?)
+                .ok_or(UsbError::Protocol("bad uvc header"))?;
             match prev_fid {
                 None => prev_fid = Some(p.fid()),
                 Some(prev) if prev != p.fid() => break p, // 翻转!本包即首包
@@ -161,7 +146,8 @@ impl UvcCamera {
 
         // 后续包:逐个读、追加、判帧结束。
         loop {
-            let p = read_packet(iso, work_off)?;
+            let p = UvcPacket::new(iso.read_payload(work_off)?)
+                .ok_or(UsbError::Protocol("bad uvc header"))?;
 
             // FID 翻转:上一帧可能完整(EOI 在)?
             if !p.is_fid(fid) {

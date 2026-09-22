@@ -4,12 +4,15 @@
 use tock_registers::interfaces::Readable;
 
 use super::channel::{next_uframe_oddfrm, Channel};
-use super::dma::{dma_ptr, UVC_BULK_DMA_CAP};
+use super::dma::{dma_ptr, dma_rx_slice, UVC_BULK_DMA_CAP};
 use super::regs::HCINT;
 use super::regs::{HCCHAR, HCTSIZ};
 use crate::arch::cache;
 use crate::drivers::usb::error::{UsbError, UsbResult};
 use tock_registers::fields::FieldValue;
+
+/// 读微帧的重试上限(空微帧跳过;~100ms)。
+const MAX_UFRAMES: u32 = 80_000;
 
 /// `wMaxPacketSize` 原始值 → 低 11 位（每事务最大字节数）。
 #[inline]
@@ -57,6 +60,18 @@ impl IsochInEp {
             + HCCHAR::MC.val(1)
             // 等时 IN:方向恒 IN(视频流)
             + HCCHAR::EPDIR::SET
+    }
+
+    /// 读一个有数据的微帧,返回 DMA 窗口中的负载切片。
+    /// 跳过空微帧;无数据超时返回 Err。
+    pub fn read_payload(&self, dma_off: usize) -> UsbResult<&[u8]> {
+        for _ in 0..MAX_UFRAMES {
+            let actual = self.read_uframe(dma_off)?;
+            if actual > 0 {
+                return dma_rx_slice(dma_off, actual).ok_or(UsbError::Hardware("dma view"));
+            }
+        }
+        Err(UsbError::Timeout)
     }
 
     /// 在 **下一微帧** 启动一次通道(mult=1:单事务,DATA0,PKTCNT=1)。
