@@ -95,7 +95,9 @@ impl ControlEp {
         let mut i = 0;
         while i + 2 <= buf.len() {
             let bl = buf[i] as usize;
-            if bl < 2 || i + bl > buf.len() { break; }
+            if bl < 2 || i + bl > buf.len() {
+                break;
+            }
             if buf[i + 1] == USB_DT_INTERFACE && i + 6 <= buf.len() {
                 return Ok(buf[i + 5]);
             }
