@@ -48,8 +48,13 @@ impl<'a> UvcPacket<'a> {
 enum FrameState {
     /// 等待首次 FID 翻转（丢弃当前不完整帧的尾巴）。
     WaitFirstSwitch { last_fid: Option<u8> },
-    /// 已锁定 frame_fid，开始累积；遇 EOF 或 fid 翻转都视为帧结束。
-    Capturing { frame_fid: u8, saw_data: bool },
+    /// 已锁定 frame_fid，开始累积;`jpeg_len` 随状态走(不再独立传参,
+    /// 消除满屏 `*jpeg_len` 解引用)。遇 EOF 或 fid 翻转都视为帧结束。
+    Capturing {
+        frame_fid: u8,
+        saw_data: bool,
+        jpeg_len: usize,
+    },
 }
 
 /// 跨 capture 持久化的「上次 EOF 帧的 FID」。
@@ -57,33 +62,28 @@ enum FrameState {
 /// 开始，免去等到下一次完整翻转的 ~半~一个帧周期。
 static LAST_EOF_FID: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xFF);
 
-fn process_packet(
-    pkt: &[u8],
-    state: &mut FrameState,
-    jpeg_len: &mut usize,
-    jpeg_cap: usize,
-) -> UsbResult<bool> {
-    let Some(p) = UvcPacket::new(pkt) else {
-        return Ok(false); // 头非法:丢弃
-    };
-    if let FrameState::WaitFirstSwitch { last_fid } = state {
-        match *last_fid {
-            // 还没见过任何 FID：记住当前值，等下一次翻转。
+fn process_packet(p: &UvcPacket<'_>, state: &mut FrameState, jpeg_cap: usize) -> UsbResult<bool> {
+    match state {
+        FrameState::WaitFirstSwitch { last_fid } => match *last_fid {
+            // 还没见过任何 FID:记住当前值,等下一次翻转。
             None => {
                 *last_fid = Some(p.fid());
-                return Ok(false);
+                Ok(false)
             }
-            // FID 翻转 = 新帧开始：转入 Capturing，本包继续处理。
-            Some(prev) if prev != p.fid() => {
+            // 同一 FID:还在帧尾残留里,跳过。
+            Some(prev) if prev == p.fid() => Ok(false),
+            // FID 翻转 = 新帧开始:转入 Capturing,本包继续处理。
+            Some(_) => {
                 *state = FrameState::Capturing {
                     frame_fid: p.fid(),
                     saw_data: false,
+                    jpeg_len: 0,
                 };
+                process_packet_capturing(p, state, jpeg_cap)
             }
-            _ => return Ok(false),
-        }
+        },
+        FrameState::Capturing { .. } => process_packet_capturing(p, state, jpeg_cap),
     }
-    process_packet_capturing(state, &p, jpeg_len, jpeg_cap)
 }
 
 /// 检查已累积 JPEG 的末 2 字节是否为 EOI(`ff d9`)；DMA 读失败视为不是。
@@ -96,22 +96,22 @@ fn tail_is_eoi(len: usize) -> bool {
 
 /// Capturing 状态的单包 MJPEG 帧组装;仅由 [`process_packet`] 在确认状态后调用。
 fn process_packet_capturing(
-    state: &mut FrameState,
     p: &UvcPacket<'_>,
-    jpeg_len: &mut usize,
+    state: &mut FrameState,
     jpeg_cap: usize,
 ) -> UsbResult<bool> {
     let FrameState::Capturing {
         frame_fid,
         saw_data,
+        jpeg_len,
     } = state
     else {
         unreachable!()
     };
-    let payload = p.payload();
+
     if p.fid() != *frame_fid {
         // 廉价 webcam 的"元数据帧"陷阱:带 SOI 但无 EOI,FID 也会翻转——
-        // 要求 EOI(`ff d9`)真实存在才认为帧完整,否则丢弃重新开始。
+        // 要求 EOI(ff d9)真实存在才认为帧完整,否则丢弃重新开始。
         if *saw_data && tail_is_eoi(*jpeg_len) {
             return Ok(true);
         }
@@ -120,8 +120,10 @@ fn process_packet_capturing(
         *frame_fid = p.fid();
         *saw_data = false;
     }
+
+    let payload = p.payload();
     if !payload.is_empty() {
-        // 首次累积须以 SOI(`ff d8`) 开头:摄像头帧间有 padding packet(同 FID
+        // 首次累积须以 SOI(ff d8) 开头:摄像头帧间有 padding packet(同 FID
         // 但无 SOI),直接累积会产出首字节非 ff d8 的截断帧——跳过等真 SOI。
         if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
             return Ok(false);
@@ -133,14 +135,13 @@ fn process_packet_capturing(
         *jpeg_len += payload.len();
         *saw_data = true;
     }
+
     if p.eof() {
         // EOF 同样校验 EOI:metadata 帧带合法 EOF 标记但 JPEG 仅有 SOI。
         if *saw_data && tail_is_eoi(*jpeg_len) {
             return Ok(true);
         }
         // 残帧(带 EOF 但无 EOI):丢弃累积,回到 WaitFirstSwitch 干净开始。
-        *jpeg_len = 0;
-        *saw_data = false;
         *state = FrameState::WaitFirstSwitch {
             last_fid: Some(p.fid()),
         };
@@ -159,7 +160,6 @@ impl UvcCamera {
         let mps_low = dwc2::wmax_mps(self.sel.mps_raw).max(1) as usize;
         let mult = dwc2::wmax_mult(self.sel.mps_raw).clamp(1, 3) as usize;
         let jpeg_cap = UVC_BULK_DMA_CAP.saturating_sub(UVC_WORK_AREA_BYTES);
-        let mut jpeg_len = 0usize;
         let mut transfers = 0u32;
         let mut data_transfers = 0u32;
         let work_off = DMA_OFF_UVC_BULK;
@@ -182,26 +182,44 @@ impl UvcCamera {
             let slice =
                 dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
-            let eof = if mult == 1 {
-                process_packet(slice, &mut state, &mut jpeg_len, jpeg_cap)?
-            } else {
-                // mult>1：一次 read_uframe 的 DMA 数据里可能含多个 USB 包，按 mps 切开逐包处理。
-                let mut hit_eof = false;
-                for pkt in slice.chunks(mps_low) {
-                    if process_packet(pkt, &mut state, &mut jpeg_len, jpeg_cap)? {
-                        hit_eof = true;
-                        break;
+            let eof = match slice.iter().position(|_| true).map(|_| ()) {
+                _ => {
+                    let mut process = |pkt: &[u8]| -> UsbResult<bool> {
+                        match UvcPacket::new(pkt) {
+                            Some(p) => process_packet(&p, &mut state, jpeg_cap),
+                            None => Ok(false),
+                        }
+                    };
+                    if mult == 1 {
+                        process(slice)?
+                    } else {
+                        // mult>1:一次 read_uframe 可能含多个 USB 包,按 mps 切开。
+                        let mut hit_eof = false;
+                        for pkt in slice.chunks(mps_low) {
+                            if process(pkt)? {
+                                hit_eof = true;
+                                break;
+                            }
+                        }
+                        hit_eof
                     }
                 }
-                hit_eof
             };
             if eof {
+                let jpeg_len = match &state {
+                    FrameState::Capturing { jpeg_len, .. } => *jpeg_len,
+                    _ => 0,
+                };
                 if let FrameState::Capturing { frame_fid, .. } = state {
                     LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
                 }
                 return Ok(jpeg_len);
             }
         }
+        let jpeg_len = match &state {
+            FrameState::Capturing { jpeg_len, .. } => *jpeg_len,
+            _ => 0,
+        };
         log::info!(
             "UVC: capture timeout after {} uframes ({} data; {} bytes assembled, mult={})",
             transfers,
