@@ -57,34 +57,90 @@ enum FrameState {
     },
 }
 
+impl FrameState {
+    /// 处理一个 UVC 包;命中帧结束返回 true。
+    fn process_packet(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
+        match self {
+            FrameState::WaitFirstSwitch { last_fid } => match *last_fid {
+                // 还没见过任何 FID:记住当前值,等下一次翻转。
+                None => {
+                    *last_fid = Some(p.fid());
+                    Ok(false)
+                }
+                // 同一 FID:还在帧尾残留里,跳过。
+                Some(prev) if prev == p.fid() => Ok(false),
+                // FID 翻转 = 新帧开始:转入 Capturing,本包继续处理。
+                Some(_) => {
+                    *self = FrameState::Capturing {
+                        frame_fid: p.fid(),
+                        saw_data: false,
+                        jpeg_len: 0,
+                    };
+                    self.process_packet_capturing(p, jpeg_cap)
+                }
+            },
+            FrameState::Capturing { .. } => self.process_packet_capturing(p, jpeg_cap),
+        }
+    }
+
+    // process_packet_capturing 的原文,改为方法
+    /// Capturing 状态的单包 MJPEG 帧组装;仅由 [`process_packet`] 在确认状态后调用。
+    fn process_packet_capturing(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
+        let Self::Capturing {
+            frame_fid,
+            saw_data,
+            jpeg_len,
+        } = self
+        else {
+            unreachable!()
+        };
+
+        if p.fid() != *frame_fid {
+            // 廉价 webcam 的"元数据帧"陷阱:带 SOI 但无 EOI,FID 也会翻转——
+            // 要求 EOI(ff d9)真实存在才认为帧完整,否则丢弃重新开始。
+            if *saw_data && tail_is_eoi(*jpeg_len) {
+                return Ok(true);
+            }
+            // 残帧(无 EOI):丢弃累积,当前 packet 作为新帧首包。
+            *jpeg_len = 0;
+            *frame_fid = p.fid();
+            *saw_data = false;
+        }
+
+        let payload = p.payload();
+        if !payload.is_empty() {
+            // 首次累积须以 SOI(ff d8) 开头:摄像头帧间有 padding packet(同 FID
+            // 但无 SOI),直接累积会产出首字节非 ff d8 的截断帧——跳过等真 SOI。
+            if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
+                return Ok(false);
+            }
+            if *jpeg_len + payload.len() > jpeg_cap {
+                return Err(UsbError::Hardware("video assemble overflow"));
+            }
+            dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
+            *jpeg_len += payload.len();
+            *saw_data = true;
+        }
+
+        if p.eof() {
+            // EOF 同样校验 EOI:metadata 帧带合法 EOF 标记但 JPEG 仅有 SOI。
+            if *saw_data && tail_is_eoi(*jpeg_len) {
+                return Ok(true);
+            }
+            // 残帧(带 EOF 但无 EOI):丢弃累积,回到 WaitFirstSwitch 干净开始。
+            *self = FrameState::WaitFirstSwitch {
+                last_fid: Some(p.fid()),
+            };
+            return Ok(false);
+        }
+        Ok(false)
+    }
+}
+
 /// 跨 capture 持久化的「上次 EOF 帧的 FID」。
 /// 0xFF = 还没抓过；其它值 = 0/1。后续 capture 直接以 `WaitFirstSwitch { last_fid: Some(..) }`
 /// 开始，免去等到下一次完整翻转的 ~半~一个帧周期。
 static LAST_EOF_FID: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xFF);
-
-fn process_packet(p: &UvcPacket<'_>, state: &mut FrameState, jpeg_cap: usize) -> UsbResult<bool> {
-    match state {
-        FrameState::WaitFirstSwitch { last_fid } => match *last_fid {
-            // 还没见过任何 FID:记住当前值,等下一次翻转。
-            None => {
-                *last_fid = Some(p.fid());
-                Ok(false)
-            }
-            // 同一 FID:还在帧尾残留里,跳过。
-            Some(prev) if prev == p.fid() => Ok(false),
-            // FID 翻转 = 新帧开始:转入 Capturing,本包继续处理。
-            Some(_) => {
-                *state = FrameState::Capturing {
-                    frame_fid: p.fid(),
-                    saw_data: false,
-                    jpeg_len: 0,
-                };
-                process_packet_capturing(p, state, jpeg_cap)
-            }
-        },
-        FrameState::Capturing { .. } => process_packet_capturing(p, state, jpeg_cap),
-    }
-}
 
 /// 检查已累积 JPEG 的末 2 字节是否为 EOI(`ff d9`)；DMA 读失败视为不是。
 fn tail_is_eoi(len: usize) -> bool {
@@ -92,62 +148,6 @@ fn tail_is_eoi(len: usize) -> bool {
         && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + len - 2, 2)
             .map(|t| t == [0xff, 0xd9])
             .unwrap_or(false)
-}
-
-/// Capturing 状态的单包 MJPEG 帧组装;仅由 [`process_packet`] 在确认状态后调用。
-fn process_packet_capturing(
-    p: &UvcPacket<'_>,
-    state: &mut FrameState,
-    jpeg_cap: usize,
-) -> UsbResult<bool> {
-    let FrameState::Capturing {
-        frame_fid,
-        saw_data,
-        jpeg_len,
-    } = state
-    else {
-        unreachable!()
-    };
-
-    if p.fid() != *frame_fid {
-        // 廉价 webcam 的"元数据帧"陷阱:带 SOI 但无 EOI,FID 也会翻转——
-        // 要求 EOI(ff d9)真实存在才认为帧完整,否则丢弃重新开始。
-        if *saw_data && tail_is_eoi(*jpeg_len) {
-            return Ok(true);
-        }
-        // 残帧(无 EOI):丢弃累积,当前 packet 作为新帧首包。
-        *jpeg_len = 0;
-        *frame_fid = p.fid();
-        *saw_data = false;
-    }
-
-    let payload = p.payload();
-    if !payload.is_empty() {
-        // 首次累积须以 SOI(ff d8) 开头:摄像头帧间有 padding packet(同 FID
-        // 但无 SOI),直接累积会产出首字节非 ff d8 的截断帧——跳过等真 SOI。
-        if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
-            return Ok(false);
-        }
-        if *jpeg_len + payload.len() > jpeg_cap {
-            return Err(UsbError::Hardware("video assemble overflow"));
-        }
-        dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
-        *jpeg_len += payload.len();
-        *saw_data = true;
-    }
-
-    if p.eof() {
-        // EOF 同样校验 EOI:metadata 帧带合法 EOF 标记但 JPEG 仅有 SOI。
-        if *saw_data && tail_is_eoi(*jpeg_len) {
-            return Ok(true);
-        }
-        // 残帧(带 EOF 但无 EOI):丢弃累积,回到 WaitFirstSwitch 干净开始。
-        *state = FrameState::WaitFirstSwitch {
-            last_fid: Some(p.fid()),
-        };
-        return Ok(false);
-    }
-    Ok(false)
 }
 
 impl UvcCamera {
@@ -166,7 +166,7 @@ impl UvcCamera {
     ) -> UsbResult<bool> {
         let mut step = |pkt: &[u8]| -> UsbResult<bool> {
             match UvcPacket::new(pkt) {
-                Some(p) => process_packet(&p, state, jpeg_cap),
+                Some(p) => state.process_packet(&p, jpeg_cap),
                 None => Ok(false),
             }
         };
