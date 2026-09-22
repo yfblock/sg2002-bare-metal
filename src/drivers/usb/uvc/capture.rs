@@ -155,6 +155,33 @@ impl UvcCamera {
     ///
     /// **关键**：等时模式下 `mult=1` 时，每次 `IsochInEp::read_uframe` 返回的整个数据（最多 mps 字节）就是
     /// **一个完整的 USB 包 = 一个 UVC 数据包**（带 12 字节头），**不可再切分**。
+    /// 处理一次 read_uframe 返回的 DMA 数据(一层包或按 mps 切开的多个包)。
+    /// 命中帧结束返回 `true`。
+    fn process_packets(
+        slice: &[u8],
+        mult: usize,
+        mps_low: usize,
+        state: &mut FrameState,
+        jpeg_cap: usize,
+    ) -> UsbResult<bool> {
+        let mut step = |pkt: &[u8]| -> UsbResult<bool> {
+            match UvcPacket::new(pkt) {
+                Some(p) => process_packet(&p, state, jpeg_cap),
+                None => Ok(false),
+            }
+        };
+        // mult=1:整个 read_uframe 就是**一个** UVC 包;mult>1:按 mps 切开。
+        if mult == 1 {
+            return step(slice);
+        }
+        for pkt in slice.chunks(mps_low) {
+            if step(pkt)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn capture_frame(&self) -> UsbResult<usize> {
         let iso = dwc2::IsochInEp::new(self.control_ep.dev(), self.sel.ep_num, self.sel.mps_raw);
         let mps_low = dwc2::wmax_mps(self.sel.mps_raw).max(1) as usize;
@@ -165,7 +192,7 @@ impl UvcCamera {
         let work_off = DMA_OFF_UVC_BULK;
         let prev_eof_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
         let mut state = FrameState::WaitFirstSwitch {
-            last_fid: (prev_eof_fid <= 1).then_some(prev_eof_fid)
+            last_fid: (prev_eof_fid <= 1).then_some(prev_eof_fid),
         };
         const MAX_UFRAMES: u32 = 80_000;
         for _ in 0..MAX_UFRAMES {
@@ -178,26 +205,7 @@ impl UvcCamera {
             let slice =
                 dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
-            // mult=1:整个 read_uframe 就是**一个** UVC 包;mult>1:按 mps 切开逐包。
-            let mut hit_eof = |pkt: &[u8]| -> UsbResult<bool> {
-                match UvcPacket::new(pkt) {
-                    Some(p) => process_packet(&p, &mut state, jpeg_cap),
-                    None => Ok(false),
-                }
-            };
-            let eof = if mult == 1 {
-                hit_eof(slice)?
-            } else {
-                let mut eof = false;
-                for pkt in slice.chunks(mps_low) {
-                    if hit_eof(pkt)? {
-                        eof = true;
-                        break;
-                    }
-                }
-                eof
-            };
-            if eof {
+            if Self::process_packets(slice, mult, mps_low, &mut state, jpeg_cap)? {
                 if let FrameState::Capturing {
                     frame_fid,
                     jpeg_len,
