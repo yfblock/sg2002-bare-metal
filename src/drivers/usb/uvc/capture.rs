@@ -84,10 +84,15 @@ impl FrameState {
     }
 
     // process_packet_capturing 的原文,改为方法
-    /// Capturing 状态的单包 MJPEG 帧组装;仅由 [`process_packet`] 在确认状态后调用。
+    /// Capturing 状态的单包 MJPEG 帧组装;仅由 [`Self::process_packet`] 在确认状态后调用。
+    ///
+    /// **残帧陷阱**(0c45:64ab 等廉价 webcam):帧间会插入"元数据帧"——带 SOI
+    /// 但无 EOI(典型 1008 字节),FID 也会翻转、EOF 标记也可能合法。所有
+    /// "帧结束"判定都要求 EOI(`ff d9`)真实存在,否则丢弃重新开始。
     fn process_packet_capturing(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
+        // 解构为本地可变引用——后续代码不再满屏 *xxx
         let Self::Capturing {
-            frame_fid,
+            frame_fid: fid,
             saw_data,
             jpeg_len,
         } = self
@@ -95,22 +100,17 @@ impl FrameState {
             unreachable!()
         };
 
-        if p.fid() != *frame_fid {
-            // 廉价 webcam 的"元数据帧"陷阱:带 SOI 但无 EOI,FID 也会翻转——
-            // 要求 EOI(ff d9)真实存在才认为帧完整,否则丢弃重新开始。
+        // FID 翻转:上一帧可能完整(EOI 存在)→返回;或残帧→丢弃重开。
+        if p.fid() != *fid {
             if *saw_data && tail_is_eoi(*jpeg_len) {
-                return Ok(true);
+                return Ok(true); // 帧完整
             }
-            // 残帧(无 EOI):丢弃累积,当前 packet 作为新帧首包。
-            *jpeg_len = 0;
-            *frame_fid = p.fid();
-            *saw_data = false;
+            (*jpeg_len, *fid, *saw_data) = (0, p.fid(), false); // 重开
         }
 
         let payload = p.payload();
         if !payload.is_empty() {
-            // 首次累积须以 SOI(ff d8) 开头:摄像头帧间有 padding packet(同 FID
-            // 但无 SOI),直接累积会产出首字节非 ff d8 的截断帧——跳过等真 SOI。
+            // 首次累积须以 SOI(ff d8) 开头(padding packet 跳过)。
             if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
                 return Ok(false);
             }
@@ -122,16 +122,15 @@ impl FrameState {
             *saw_data = true;
         }
 
+        // EOF:帧结束的正式信号,但残帧也可能带 EOF——EOI 说了算。
+        if p.eof() && *saw_data && tail_is_eoi(*jpeg_len) {
+            return Ok(true); // 帧完整
+        }
         if p.eof() {
-            // EOF 同样校验 EOI:metadata 帧带合法 EOF 标记但 JPEG 仅有 SOI。
-            if *saw_data && tail_is_eoi(*jpeg_len) {
-                return Ok(true);
-            }
-            // 残帧(带 EOF 但无 EOI):丢弃累积,回到 WaitFirstSwitch 干净开始。
+            // 残帧(带 EOF 但无 EOI):丢弃,回 WaitFirstSwitch 干净开始。
             *self = FrameState::WaitFirstSwitch {
                 last_fid: Some(p.fid()),
             };
-            return Ok(false);
         }
         Ok(false)
     }
