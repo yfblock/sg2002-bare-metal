@@ -96,26 +96,26 @@ impl UvcCamera {
         let init_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
         let init_fid = (init_fid <= 1).then_some(init_fid);
 
-        // 每轮 = 尝试抓一个完整帧;残帧(垃圾)→ None → continue 重试
+        // 每轮 = 等一个完整帧;残帧(垃圾)→ 重试;4 轮未成 → 超时。
         for _ in 0..4 {
-            match Self::try_frame(&iso, work_off, init_fid, jpeg_cap)? {
-                Some(len) => return Ok(len),
-                None => continue, // 残帧或超时,重试
+            match Self::try_frame(&iso, work_off, init_fid, jpeg_cap) {
+                Ok(len) => return Ok(len),
+                Err(UsbError::Timeout) => break, // 等翻转或读包超时,不再重试
+                Err(e) => return Err(e),         // 硬错误(STALL/溢出)上抛
             }
         }
-
-        log::info!("UVC: capture timeout after 4 attempts");
+        log::info!("UVC: capture timeout");
         Err(UsbError::Timeout)
     }
 
     /// 等一个完整帧:等 FID 翻转 → 攒帧 → EOI 校验。
-    /// 返回 Some(jpeg_len) = 帧完整;None = 残帧(丢弃)或超时。
+    /// 残帧或超时 → Err(Timeout)(调用方决定重试);硬错误 → Err 上抛。
     fn try_frame(
         iso: &IsochInEp,
         work_off: usize,
         init_fid: Option<u8>,
         jpeg_cap: usize,
-    ) -> UsbResult<Option<usize>> {
+    ) -> UsbResult<usize> {
         // ── 阶段1:等 FID 翻转──
         let mut prev_fid = init_fid;
         let first = loop {
@@ -140,9 +140,9 @@ impl UvcCamera {
         if first.eof() {
             if saw_data && tail_is_eoi(jpeg_len) {
                 LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
-                return Ok(Some(jpeg_len));
+                return Ok(jpeg_len);
             }
-            return Ok(None); // 单包残帧
+            return Err(UsbError::Timeout); // 单包残帧
         }
 
         // 后续包:逐个读、追加、判帧结束。
@@ -155,7 +155,7 @@ impl UvcCamera {
             if !p.is_fid(fid) {
                 if saw_data && tail_is_eoi(jpeg_len) {
                     LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
-                    return Ok(Some(jpeg_len));
+                    return Ok(jpeg_len);
                 }
                 // 残帧:丢弃重开
                 (jpeg_len, fid, saw_data) = (0, p.fid(), false);
@@ -167,9 +167,9 @@ impl UvcCamera {
             if p.eof() {
                 if saw_data && tail_is_eoi(jpeg_len) {
                     LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
-                    return Ok(Some(jpeg_len));
+                    return Ok(jpeg_len);
                 }
-                return Ok(None); // 残帧:告诉调用方丢弃重试
+                return Err(UsbError::Timeout); // 残帧:视为本轮超时,让调用方重试
             }
         }
     }
