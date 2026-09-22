@@ -89,7 +89,7 @@ fn process_packet(
 fn tail_is_eoi(len: usize) -> bool {
     len >= 2
         && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + len - 2, 2)
-            .map(|t| t[0] == 0xff && t[1] == 0xd9)
+            .map(|t| t == [0xff, 0xd9])
             .unwrap_or(false)
 }
 

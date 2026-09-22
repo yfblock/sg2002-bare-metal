@@ -90,17 +90,16 @@ impl ControlEp {
     fn first_interface_class(&self) -> UsbResult<u8> {
         let mut buf = [0u8; 64];
         self.read(StdRequest::get_descriptor_configuration(0, 64), &mut buf)?;
-        let mut i: usize = 0;
+        // 走描述符链找首个 INTERFACE;64 字节前缀内 bInterfaceClass@5
+        // 必在(Desc 视图在 uvc 侧,这里手走——device 层不依赖 uvc)
+        let mut i = 0;
         while i + 2 <= buf.len() {
             let bl = buf[i] as usize;
-            if bl < 2 {
-                break;
-            }
-            let ty = buf[i + 1];
-            if ty == USB_DT_INTERFACE && i + 6 <= buf.len() {
+            if bl < 2 || i + bl > buf.len() { break; }
+            if buf[i + 1] == USB_DT_INTERFACE && i + 6 <= buf.len() {
                 return Ok(buf[i + 5]);
             }
-            i = i.saturating_add(bl);
+            i += bl;
         }
         Ok(0)
     }
