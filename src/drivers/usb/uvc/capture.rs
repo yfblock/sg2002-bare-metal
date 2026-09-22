@@ -158,7 +158,9 @@ impl UvcCamera {
                     return Ok(jpeg_len);
                 }
                 // 残帧:丢弃重开
-                (jpeg_len, fid, saw_data) = (0, p.fid(), false);
+                jpeg_len = 0;
+                fid = p.fid();
+                saw_data = false;
             }
 
             append(&mut jpeg_len, &mut saw_data, p.payload(), jpeg_cap)?;
