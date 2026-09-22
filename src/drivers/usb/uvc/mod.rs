@@ -61,7 +61,8 @@ impl DeviceDriver for UvcCameraDriver {
     }
 
     fn matches(&self, dev: &UsbDevice) -> bool {
-        dev.iface_class == USB_CLASS_VIDEO
+        let m = dev.iface_class == USB_CLASS_VIDEO;
+        m
     }
 
     fn probe(&self, dev: UsbDevice) -> UsbResult<()> {

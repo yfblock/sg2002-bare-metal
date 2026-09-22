@@ -17,16 +17,32 @@ use super::DRIVERS;
 /// 本模块日志 target(单一权威点)。
 const LOG_TARGET: &str = "sg200x_bsp::usb::hub";
 
-/// Hub 端口特性：`PORT_RESET`。
-const HUB_PORT_FEATURE_RESET: u16 = 4;
-/// Hub 端口特性：`PORT_POWER`（hub 上电后端口电源默认关闭，必须先打开）。
-const HUB_PORT_FEATURE_POWER: u16 = 8;
-/// Hub 端口特性：`C_PORT_CONNECTION`（连接变化位，CLEAR 用）。
-const HUB_PORT_FEATURE_C_CONNECTION: u16 = 16;
-/// Hub 端口特性：`C_PORT_RESET`。
-const HUB_PORT_FEATURE_C_RESET: u16 = 20;
 /// Hub 类描述符类型（`GET_DESCRIPTOR(Hub)` 的 wValue 高字节）。
 const USB_DT_HUB: u8 = 0x29;
+
+/// Hub 端口特性选择子(USB 2.0 Table 11-17;每次请求取一个,非位掩码)。
+#[derive(Clone, Copy)]
+pub(crate) enum PortFeature {
+    /// `PORT_RESET`(=4):端口复位。
+    Reset,
+    /// `PORT_POWER`(=5):端口供电(hub 端口默认 PowerOff,必须显式打开)。
+    Power,
+    /// `C_PORT_CONNECTION`(=16):连接变化位,CLEAR 用。
+    ConnectionChange,
+    /// `C_PORT_RESET`(=20):复位变化位。
+    ResetChange,
+}
+
+impl PortFeature {
+    fn code(self) -> u16 {
+        match self {
+            PortFeature::Reset => 4,
+            PortFeature::Power => 8, // 规范值 5;但本板 hub 收到 5 会断电重上电切断在线相机,8(实测值)被忽略而端口保持常供电
+            PortFeature::ConnectionChange => 16,
+            PortFeature::ResetChange => 20,
+        }
+    }
+}
 
 /// `wPortStatus[0]`：当前连接。
 pub const W0_CONNECTION: u16 = 1 << 0;
@@ -127,13 +143,20 @@ pub trait Hub {
     /// 硬失败中断整树。
     fn walk_subtree(&self, next_addr: &mut u8) -> UsbResult<()> {
         let nports = self.nports();
-        // ① 给所有下游端口供电(USB 2.0 §11.11.1:hub 端口默认 PowerOff)
+        // ① 给无连接的端口供电(已有连接的跳过:常供电 hub 对已连接
+        // 端口重发 PORT_POWER 会断电重上电,切断在线设备)。
         for port in 1..=nports {
+            let connected = self
+                .port_status_w0(port)
+                .is_ok_and(|w0| w0 & W0_CONNECTION != 0);
+            if connected {
+                continue;
+            }
             if let Err(e) = self.port_power(port) {
                 log::info!(target: LOG_TARGET, "[USB] port {} POWER fail: {:?}", port, e);
             }
         }
-        // ② 等 PwrOn2PwrGood + 100ms 让下游设备 VBUS 稳定 + 自检
+        // ② 等 PwrOn2PwrGood + 100ms 让下游 VBUS 稳定。
         crate::arch::time::delay(self.pwr_good() + Duration::from_millis(100));
 
         for port in 1..=nports {
@@ -218,7 +241,7 @@ impl Hub for DeviceHub {
         // SET_PORT_FEATURE(PORT_POWER) 才会给下游 VBUS。
         self.control_ep.write_no_data(HubRequest::set_port_feature(
             port as u16,
-            HUB_PORT_FEATURE_POWER,
+            PortFeature::Power,
         ))
     }
 
@@ -232,7 +255,7 @@ impl Hub for DeviceHub {
     fn reset_port(&self, port: u8) -> UsbResult<()> {
         self.control_ep.write_no_data(HubRequest::set_port_feature(
             port as u16,
-            HUB_PORT_FEATURE_RESET,
+            PortFeature::Reset,
         ))?;
         // USB 2.0 §7.1.7.5：TDRSTR ≥ 50ms，hub 完成后自动置 C_PORT_RESET；
         // TRSTRCY（复位解除到首次事务）一并等待。
@@ -244,7 +267,7 @@ impl Hub for DeviceHub {
         self.control_ep
             .write_no_data(HubRequest::clear_port_feature(
                 port as u16,
-                HUB_PORT_FEATURE_C_CONNECTION,
+                PortFeature::ConnectionChange,
             ))
     }
 
@@ -252,7 +275,7 @@ impl Hub for DeviceHub {
         self.control_ep
             .write_no_data(HubRequest::clear_port_feature(
                 port as u16,
-                HUB_PORT_FEATURE_C_RESET,
+                PortFeature::ResetChange,
             ))
     }
 
@@ -296,16 +319,16 @@ pub(crate) struct HubRequest;
 impl HubRequest {
     /// `SET_PORT_FEATURE`（`bmRequestType=0x23`，`bRequest=SET_FEATURE`）。
     #[inline]
-    pub(crate) fn set_port_feature(port: u16, feature: u16) -> [u8; 8] {
-        let [fl, fh] = feature.to_le_bytes();
+    pub(crate) fn set_port_feature(port: u16, feature: PortFeature) -> [u8; 8] {
+        let [fl, fh] = feature.code().to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
         [0x23, 0x03, fl, fh, pl, ph, 0, 0]
     }
 
     /// `CLEAR_PORT_FEATURE`（清 `C_PORT_CONNECTION`/`C_PORT_RESET` 等变化位）。
     #[inline]
-    pub(crate) fn clear_port_feature(port: u16, feature: u16) -> [u8; 8] {
-        let [fl, fh] = feature.to_le_bytes();
+    pub(crate) fn clear_port_feature(port: u16, feature: PortFeature) -> [u8; 8] {
+        let [fl, fh] = feature.code().to_le_bytes();
         let [pl, ph] = port.to_le_bytes();
         [0x23, 0x01, fl, fh, pl, ph, 0, 0]
     }
