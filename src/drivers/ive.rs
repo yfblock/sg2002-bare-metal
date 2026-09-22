@@ -1,5 +1,11 @@
 //! IVE (Image Video Engine) 硬件 CSC（YUV→RGB）驱动，`tock-registers` 封装。
 //!
+//! **注意**： 当前未被调用——大核消费 YUV（），不消费 RGB；
+//! 且 RGB888_PLANAR 输出 3×w×h 从 `RGB_BUF_PA=0x8FF5E000` 起会溢出至
+//! `0x9003F000`（覆盖邮箱 + rtos_region 外内存），是流中途 WDT 复位的根因。
+//! 若将来需 RGB 输出，须先扩展 rtos_region 或改用 RGB565（2 字节/像素）。
+#![allow(dead_code)]
+//!
 //! SG2002 的 IVE 在 0x0A0A0000，有专用 CSC 硬件，支持内存到内存转换。
 //! 小核可访问（已验证）。CSC 在 FILTEROP 块里实现，通过直接写寄存器启动。
 //!

@@ -53,6 +53,8 @@ pub const YUV_BUF_SIZE: usize = 614400;
 pub const JPU_POOL_PA: usize = 0x8FF1_E000;
 pub const JPU_POOL_SIZE: usize = 0x0004_0000; // 256KB
 /// RGB888 planar 输出（IVE CSC 输出;三平面各 307200B）。
+// IVE CSC 已移除(大核消费 YUV 不消费 RGB);此常量保留作布局文档。
+#[allow(dead_code)]
 pub const RGB_BUF_PA: usize = 0x8FF5_E000;
 
 // 模块常量

@@ -148,7 +148,16 @@ pub fn set_muted(v: bool) {
 pub fn handle_mailbox_irq() {
     // 排水:一轮 claim 的窗口内若大核又敲铃,级别触发的 PLIC 会再次进来;
     // 这里顺带就地消费,省一次 trap 进出(大核 2s 一发,循环至多两圈)。
+    // 防御:claim_b2s 若因跨核 RMW 竞态导致 pending 复活,循环可能
+    // 转不出去——ISR 死循环会饿死 mtimer,WDT 0.34s 复位整片。
+    // 上限 4 圈:大核 B2S 间隔 2s,远超需要;异常时宁可丢消息不让 WDT 复位。
+    let mut drain = 0u32;
     while let Some(msg) = unsafe { hw::claim_b2s() } {
+        drain += 1;
+        if drain > 4 {
+            crate::logger::print("[MB] drain overflow, break\n");
+            break;
+        }
         // 控制消息 0xF0_49_<cmd>_<arg>（'I' = IVE 调试通道）。
         if msg & 0xFFFF_0000 == 0xF049_0000 {
             let cmd = (msg >> 8) & 0xFF;

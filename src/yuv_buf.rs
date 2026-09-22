@@ -28,6 +28,7 @@ pub struct RgbPlanes {
 /// `(w/2) × (h/2)`。之前按 420 算，V 平面起始地址少了 `(w/2)*(h/2)` 字节，
 /// 会让 IVE 把 U 平面的下半段当成 V 读。
 #[inline]
+#[allow(dead_code)]
 pub fn yuv_planes(pa: usize, w: u32, h: u32) -> YuvPlanes {
     YuvPlanes {
         y: pa,
@@ -40,6 +41,7 @@ pub fn yuv_planes(pa: usize, w: u32, h: u32) -> YuvPlanes {
 
 /// 取 RGB 的 R/G/B 平面地址。
 #[inline]
+#[allow(dead_code)]
 pub fn rgb_planes(pa: usize, w: u32, h: u32) -> RgbPlanes {
     RgbPlanes {
         r: pa,

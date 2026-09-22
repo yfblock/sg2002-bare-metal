@@ -125,10 +125,10 @@ fn decode_and_notify(jpeg_len: usize, frames: u32) {
         Err(_) => return notify_mjpeg_only(frames, jpeg_len),
     };
 
-    // IVE 硬件 CSC
-    let yuv = yuv_buf::yuv_planes(platform::YUV_BUF_PA, w, h);
-    let rgb = yuv_buf::rgb_planes(platform::RGB_BUF_PA, w, h);
-    if let Err(_e) = crate::drivers::ive::csc(&yuv, &rgb, w, h) {}
+    // IVE 硬件 CSC 移除:大核消费 YUV(FLAG_YUV_READY),RGB 输出
+    // 是空转;且 RGB888_PLANAR 3 平面 = 3×w×h = 921KB 从 0x8FF5E000
+    // 起溢出至 0x9003F000——覆盖邮箱(0x8FFFE000)+rtos_region 外
+    // 内存,造成随机 WDT 复位(帧流中途死)。零功能损失,根治。
 
     let reported = len.min(platform::YUV_BUF_SIZE);
     let flags = ipc::FLAG_SOI | ipc::FLAG_EOI | ipc::FLAG_YUV_READY | ipc::encode_dims(w, h);
