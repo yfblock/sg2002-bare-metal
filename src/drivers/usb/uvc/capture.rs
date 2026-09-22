@@ -4,6 +4,7 @@
 use crate::drivers::usb::dwc2;
 use crate::drivers::usb::dwc2::{IsochInEp, DMA_OFF_UVC_BULK, UVC_BULK_DMA_CAP};
 use crate::drivers::usb::error::{UsbError, UsbResult};
+use core::sync::atomic::Ordering;
 
 use super::session::UvcCamera;
 
@@ -105,7 +106,6 @@ impl UvcCamera {
         let work_off = DMA_OFF_UVC_BULK;
         let init_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
         let init_fid = (init_fid <= 1).then_some(init_fid);
-        let jpeg_len = 0usize;
 
         // 每轮 = 尝试抓一个完整帧;残帧(垃圾)→ None → continue 重试
         for _ in 0..4 {
@@ -115,7 +115,7 @@ impl UvcCamera {
             }
         }
 
-        log::info!("UVC: capture timeout ({} bytes last)", jpeg_len);
+        log::info!("UVC: capture timeout after 4 attempts");
         Err(UsbError::Timeout)
     }
 
@@ -143,20 +143,25 @@ impl UvcCamera {
         let mut jpeg_len = 0usize;
         let mut saw_data = false;
         let mut fid = frame_fid;
-        let mut first_done = false;
 
+        // 首包:刚翻转,直接追加(不进循环,消 first_done flag)。
+        append(&mut jpeg_len, &mut saw_data, first.payload(), jpeg_cap)?;
+        if first.eof() {
+            if saw_data && tail_is_eoi(jpeg_len) {
+                LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
+                return Ok(Some(jpeg_len));
+            }
+            return Ok(None); // 单包残帧
+        }
+
+        // 后续包:逐个读、追加、判帧结束。
         loop {
-            let p = if !first_done {
-                first_done = true;
-                &first
-            } else {
-                &read_packet(iso, work_off)?
-            };
+            let p = read_packet(iso, work_off)?;
 
             // FID 翻转:上一帧可能完整(EOI 在)?
             if p.fid() != fid {
                 if saw_data && tail_is_eoi(jpeg_len) {
-                    LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+                    LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
                     return Ok(Some(jpeg_len));
                 }
                 // 残帧:丢弃重开
@@ -168,7 +173,7 @@ impl UvcCamera {
             // EOF + EOI = 帧完整;EOF 无 EOI = 残帧
             if p.eof() {
                 if saw_data && tail_is_eoi(jpeg_len) {
-                    LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+                    LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
                     return Ok(Some(jpeg_len));
                 }
                 return Ok(None); // 残帧:告诉调用方丢弃重试
