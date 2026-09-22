@@ -102,7 +102,7 @@ impl FrameState {
 
         // FID 翻转:上一帧可能完整(EOI 存在)→返回;或残帧→丢弃重开。
         if p.fid() != *fid {
-            if *saw_data && tail_is_eoi(*jpeg_len) {
+            if *saw_data && Self::tail_is_eoi(*jpeg_len) {
                 return Ok(true); // 帧完整
             }
             (*jpeg_len, *fid, *saw_data) = (0, p.fid(), false); // 重开
@@ -123,7 +123,7 @@ impl FrameState {
         }
 
         // EOF:帧结束的正式信号,但残帧也可能带 EOF——EOI 说了算。
-        if p.eof() && *saw_data && tail_is_eoi(*jpeg_len) {
+        if p.eof() && *saw_data && Self::tail_is_eoi(*jpeg_len) {
             return Ok(true); // 帧完整
         }
         if p.eof() {
@@ -134,20 +134,19 @@ impl FrameState {
         }
         Ok(false)
     }
+
+    /// 已累积 JPEG 的末 2 字节是否为 EOI(`ff d9`)——帧完整性判定。
+    /// DMA 读失败(含 len<2 经 saturating_sub 落在窗口外的场景)视为不是。
+    fn tail_is_eoi(jpeg_len: usize) -> bool {
+        dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + jpeg_len.saturating_sub(2), 2)
+            .is_some_and(|t| t == [0xff, 0xd9])
+    }
 }
 
 /// 跨 capture 持久化的「上次 EOF 帧的 FID」。
 /// 0xFF = 还没抓过；其它值 = 0/1。后续 capture 直接以 `WaitFirstSwitch { last_fid: Some(..) }`
 /// 开始，免去等到下一次完整翻转的 ~半~一个帧周期。
 static LAST_EOF_FID: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xFF);
-
-/// 检查已累积 JPEG 的末 2 字节是否为 EOI(`ff d9`)；DMA 读失败视为不是。
-fn tail_is_eoi(len: usize) -> bool {
-    len >= 2
-        && dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + len - 2, 2)
-            .map(|t| t == [0xff, 0xd9])
-            .unwrap_or(false)
-}
 
 impl UvcCamera {
     /// 抓一帧（视频负载组装至 [`UVC_ASSEMBLED_JPEG_DMA_OFF`]）。
