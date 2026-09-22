@@ -61,38 +61,34 @@ impl FrameState {
     /// 处理一个 UVC 包;命中帧结束返回 true。
     fn process_packet(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
         match self {
-            FrameState::WaitFirstSwitch { last_fid } => match *last_fid {
-                // 还没见过任何 FID:记住当前值,等下一次翻转。
+            Self::WaitFirstSwitch { last_fid } => match *last_fid {
                 None => {
-                    *last_fid = Some(p.fid());
+                    *last_fid = Some(p.fid()); // 记住当前值,等下一次翻转
                     Ok(false)
                 }
-                // 同一 FID:还在帧尾残留里,跳过。
-                Some(prev) if prev == p.fid() => Ok(false),
-                // FID 翻转 = 新帧开始:转入 Capturing,本包继续处理。
+                Some(prev) if prev == p.fid() => Ok(false), // 同 FID:旧帧尾巴,跳过
                 Some(_) => {
-                    *self = FrameState::Capturing {
+                    // FID 翻转 = 新帧开始;本包即首包,直接进组装
+                    *self = Self::Capturing {
                         frame_fid: p.fid(),
                         saw_data: false,
                         jpeg_len: 0,
                     };
-                    self.process_packet_capturing(p, jpeg_cap)
+                    self.assemble(p, jpeg_cap)
                 }
             },
-            FrameState::Capturing { .. } => self.process_packet_capturing(p, jpeg_cap),
+            Self::Capturing { .. } => self.assemble(p, jpeg_cap),
         }
     }
 
-    // process_packet_capturing 的原文,改为方法
-    /// Capturing 状态的单包 MJPEG 帧组装;仅由 [`Self::process_packet`] 在确认状态后调用。
+    /// 组装一个包到当前帧(Capturing 状态);帧结束判定 + 残帧处理。
     ///
-    /// **残帧陷阱**(0c45:64ab 等廉价 webcam):帧间会插入"元数据帧"——带 SOI
-    /// 但无 EOI(典型 1008 字节),FID 也会翻转、EOF 标记也可能合法。所有
-    /// "帧结束"判定都要求 EOI(`ff d9`)真实存在,否则丢弃重新开始。
-    fn process_packet_capturing(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
-        // 解构为本地可变引用——后续代码不再满屏 *xxx
+    /// **残帧陷阱**(0c45:64ab 等):帧间插入"元数据帧"——带 SOI 但无 EOI
+    /// (典型 1008 字节),FID 翻转/EOF 均合法。所有"帧结束"判定都要求
+    /// EOI(`ff d9`)真实存在,否则丢弃重开。
+    fn assemble(&mut self, p: &UvcPacket<'_>, jpeg_cap: usize) -> UsbResult<bool> {
         let Self::Capturing {
-            frame_fid: fid,
+            frame_fid,
             saw_data,
             jpeg_len,
         } = self
@@ -100,17 +96,17 @@ impl FrameState {
             unreachable!()
         };
 
-        // FID 翻转:上一帧可能完整(EOI 存在)→返回;或残帧→丢弃重开。
-        if p.fid() != *fid {
+        // FID 又翻了:上一帧完整(EOI 在)?返回;否则丢弃重开。
+        if p.fid() != *frame_fid {
             if *saw_data && Self::tail_is_eoi(*jpeg_len) {
-                return Ok(true); // 帧完整
+                return Ok(true);
             }
-            (*jpeg_len, *fid, *saw_data) = (0, p.fid(), false); // 重开
+            (*jpeg_len, *frame_fid, *saw_data) = (0, p.fid(), false);
         }
 
         let payload = p.payload();
         if !payload.is_empty() {
-            // 首次累积须以 SOI(ff d8) 开头(padding packet 跳过)。
+            // 首笔须以 SOI(ff d8) 开头(padding 包跳过)。
             if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
                 return Ok(false);
             }
@@ -122,13 +118,13 @@ impl FrameState {
             *saw_data = true;
         }
 
-        // EOF:帧结束的正式信号,但残帧也可能带 EOF——EOI 说了算。
-        if p.eof() && *saw_data && Self::tail_is_eoi(*jpeg_len) {
-            return Ok(true); // 帧完整
-        }
+        // EOF:正式帧结束信号,但残帧也可能带——EOI 说了算。
         if p.eof() {
-            // 残帧(带 EOF 但无 EOI):丢弃,回 WaitFirstSwitch 干净开始。
-            *self = FrameState::WaitFirstSwitch {
+            if *saw_data && Self::tail_is_eoi(*jpeg_len) {
+                return Ok(true); // 帧完整
+            }
+            // 残帧:丢弃,回 WaitFirstSwitch 等干净帧。
+            *self = Self::WaitFirstSwitch {
                 last_fid: Some(p.fid()),
             };
         }
@@ -136,7 +132,6 @@ impl FrameState {
     }
 
     /// 已累积 JPEG 的末 2 字节是否为 EOI(`ff d9`)——帧完整性判定。
-    /// DMA 读失败(含 len<2 经 saturating_sub 落在窗口外的场景)视为不是。
     fn tail_is_eoi(jpeg_len: usize) -> bool {
         dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + jpeg_len.saturating_sub(2), 2)
             .is_some_and(|t| t == [0xff, 0xd9])
