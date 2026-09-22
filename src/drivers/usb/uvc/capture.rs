@@ -46,6 +46,11 @@ impl<'a> UvcPacket<'a> {
     fn payload(&self) -> &'a [u8] {
         &self.pkt[self.hlen..]
     }
+
+    /// 本包是否属于 FID 为 `fid` 的帧(同帧 true,翻转 false)。
+    fn is_fid(&self, fid: u8) -> bool {
+        self.fid() == fid
+    }
 }
 
 /// 跨 capture 持久化的「上次完整帧的 FID」。0xFF = 还没抓过。
@@ -159,7 +164,7 @@ impl UvcCamera {
             let p = read_packet(iso, work_off)?;
 
             // FID 翻转:上一帧可能完整(EOI 在)?
-            if p.fid() != fid {
+            if !p.is_fid(fid) {
                 if saw_data && tail_is_eoi(jpeg_len) {
                     LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
                     return Ok(Some(jpeg_len));
