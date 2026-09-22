@@ -165,11 +165,7 @@ impl UvcCamera {
         let work_off = DMA_OFF_UVC_BULK;
         let prev_eof_fid = LAST_EOF_FID.load(core::sync::atomic::Ordering::Relaxed);
         let mut state = FrameState::WaitFirstSwitch {
-            last_fid: if prev_eof_fid <= 1 {
-                Some(prev_eof_fid)
-            } else {
-                None
-            },
+            last_fid: (prev_eof_fid <= 1).then_some(prev_eof_fid)
         };
         const MAX_UFRAMES: u32 = 80_000;
         for _ in 0..MAX_UFRAMES {
