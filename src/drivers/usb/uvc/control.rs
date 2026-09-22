@@ -41,24 +41,31 @@ impl UvcCamera {
         self.control_ep.write(setup, &buf).is_ok()
     }
 
-    fn try_get_cur_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = UvcRequest::get_cur_control(self.entities.vc_interface, entity, selector, 2);
+    /// 发送读请求并解析 u16 返回值;失败(含 STALL)返回 None。
+    fn read_control_u16(&self, setup: [u8; 8]) -> Option<u16> {
         let mut buf = [0u8; 2];
-        if self.control_ep.read(setup, &mut buf).is_ok() {
-            Some(u16::from_le_bytes(buf))
-        } else {
-            None
-        }
+        self.control_ep
+            .read(setup, &mut buf)
+            .is_ok()
+            .then(|| u16::from_le_bytes(buf))
+    }
+
+    fn try_get_cur_u16(&self, entity: u8, selector: u8) -> Option<u16> {
+        self.read_control_u16(UvcRequest::get_cur_control(
+            self.entities.vc_interface,
+            entity,
+            selector,
+            2,
+        ))
     }
 
     fn try_get_def_u16(&self, entity: u8, selector: u8) -> Option<u16> {
-        let setup = UvcRequest::get_def_control(self.entities.vc_interface, entity, selector, 2);
-        let mut buf = [0u8; 2];
-        if self.control_ep.read(setup, &mut buf).is_ok() {
-            Some(u16::from_le_bytes(buf))
-        } else {
-            None
-        }
+        self.read_control_u16(UvcRequest::get_def_control(
+            self.entities.vc_interface,
+            entity,
+            selector,
+            2,
+        ))
     }
 
     fn try_set_cur_u16(&self, entity: u8, selector: u8, value: u16) -> bool {

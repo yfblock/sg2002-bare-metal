@@ -8,6 +8,7 @@ use tock_registers::LocalRegisterCopy;
 use super::regs::{Dwc2HostChannel, HCCHAR, HCINT, HCTSIZ, HFNUM};
 use crate::drivers::usb;
 use crate::drivers::usb::error::{UsbError, UsbResult};
+use core::time::Duration;
 use tock_registers::fields::FieldValue;
 /// HCINT 写 1 清除：清完整 11 位（含 ACK/NYET 等）。
 pub(crate) const HCINT_ALL_W1C: u32 = 0x7FF;
@@ -136,7 +137,7 @@ impl Channel {
                 }
                 xact_left -= 1;
                 // XACTERR 退避 1ms（让 D+/D- 稳定再试）。
-                crate::arch::time::delay(core::time::Duration::from_millis(1));
+                crate::arch::time::delay(Duration::from_millis(1));
                 continue;
             }
             if st.is_set(HCINT::NAK) {
@@ -146,7 +147,7 @@ impl Channel {
                     return Err(UsbError::Protocol("ch xfer NAK exhausted"));
                 }
                 // Synopsys 建议 NAK 后等待 ~1 ms 再重试（HSEOF）。
-                crate::arch::time::delay(core::time::Duration::from_millis(1));
+                crate::arch::time::delay(Duration::from_millis(1));
                 continue;
             }
             if !st.is_set(HCINT::XFERCOMPL) {
