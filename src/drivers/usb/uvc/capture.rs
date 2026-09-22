@@ -119,8 +119,9 @@ impl UvcCamera {
         // ── 阶段1:等 FID 翻转──
         let mut prev_fid = init_fid;
         let first = loop {
-            let p = UvcPacket::new(iso.read_payload(work_off)?)
-                .ok_or(UsbError::Protocol("bad uvc header"))?;
+            let Some(p) = UvcPacket::new(iso.read_payload(work_off)?) else {
+                continue; // 头非法:跳过,读下一个包
+            };
             match prev_fid {
                 None => prev_fid = Some(p.fid()),
                 Some(prev) if prev != p.fid() => break p, // 翻转!本包即首包
@@ -146,8 +147,9 @@ impl UvcCamera {
 
         // 后续包:逐个读、追加、判帧结束。
         loop {
-            let p = UvcPacket::new(iso.read_payload(work_off)?)
-                .ok_or(UsbError::Protocol("bad uvc header"))?;
+            let Some(p) = UvcPacket::new(iso.read_payload(work_off)?) else {
+                continue; // 头非法:跳过,读下一个包
+            };
 
             // FID 翻转:上一帧可能完整(EOI 在)?
             if !p.is_fid(fid) {
