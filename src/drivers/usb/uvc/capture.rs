@@ -182,42 +182,39 @@ impl UvcCamera {
             let slice =
                 dwc2::dma_rx_slice(work_off, actual).ok_or(UsbError::Hardware("dma view"))?;
 
-            let eof = match slice.iter().position(|_| true).map(|_| ()) {
-                _ => {
-                    let mut process = |pkt: &[u8]| -> UsbResult<bool> {
-                        match UvcPacket::new(pkt) {
-                            Some(p) => process_packet(&p, &mut state, jpeg_cap),
-                            None => Ok(false),
-                        }
-                    };
-                    if mult == 1 {
-                        process(slice)?
-                    } else {
-                        // mult>1:一次 read_uframe 可能含多个 USB 包,按 mps 切开。
-                        let mut hit_eof = false;
-                        for pkt in slice.chunks(mps_low) {
-                            if process(pkt)? {
-                                hit_eof = true;
-                                break;
-                            }
-                        }
-                        hit_eof
-                    }
+            // mult=1:整个 read_uframe 就是**一个** UVC 包;mult>1:按 mps 切开逐包。
+            let mut hit_eof = |pkt: &[u8]| -> UsbResult<bool> {
+                match UvcPacket::new(pkt) {
+                    Some(p) => process_packet(&p, &mut state, jpeg_cap),
+                    None => Ok(false),
                 }
             };
-            if eof {
-                let jpeg_len = match &state {
-                    FrameState::Capturing { jpeg_len, .. } => *jpeg_len,
-                    _ => 0,
-                };
-                if let FrameState::Capturing { frame_fid, .. } = state {
-                    LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+            let eof = if mult == 1 {
+                hit_eof(slice)?
+            } else {
+                let mut eof = false;
+                for pkt in slice.chunks(mps_low) {
+                    if hit_eof(pkt)? {
+                        eof = true;
+                        break;
+                    }
                 }
-                return Ok(jpeg_len);
+                eof
+            };
+            if eof {
+                if let FrameState::Capturing {
+                    frame_fid,
+                    jpeg_len,
+                    ..
+                } = state
+                {
+                    LAST_EOF_FID.store(frame_fid, core::sync::atomic::Ordering::Relaxed);
+                    return Ok(jpeg_len);
+                }
             }
         }
-        let jpeg_len = match &state {
-            FrameState::Capturing { jpeg_len, .. } => *jpeg_len,
+        let jpeg_len = match state {
+            FrameState::Capturing { jpeg_len, .. } => jpeg_len,
             _ => 0,
         };
         log::info!(
