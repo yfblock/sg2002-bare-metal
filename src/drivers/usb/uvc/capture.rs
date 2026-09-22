@@ -50,6 +50,25 @@ impl<'a> UvcPacket<'a> {
     fn is_fid(&self, fid: u8) -> bool {
         self.fid() == fid
     }
+
+    /// 追加本包的 payload 到帧缓冲。首笔须以 SOI(`ff d8`) 开头
+    /// (padding 包跳过);溢出返回 Err。
+    fn append(&self, jpeg_len: &mut usize, saw_data: &mut bool, jpeg_cap: usize) -> UsbResult<()> {
+        let payload = self.payload();
+        if payload.is_empty() {
+            return Ok(());
+        }
+        if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
+            return Ok(()); // padding 包:跳过
+        }
+        if *jpeg_len + payload.len() > jpeg_cap {
+            return Err(UsbError::Hardware("video assemble overflow"));
+        }
+        dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
+        *jpeg_len += payload.len();
+        *saw_data = true;
+        Ok(())
+    }
 }
 
 /// 跨 capture 持久化的「上次完整帧的 FID」。0xFF = 还没抓过。
@@ -59,28 +78,6 @@ static LAST_EOF_FID: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8
 fn tail_is_eoi(jpeg_len: usize) -> bool {
     dwc2::dma_rx_slice(UVC_ASSEMBLED_JPEG_DMA_OFF + jpeg_len.saturating_sub(2), 2)
         .is_some_and(|t| t == [0xff, 0xd9])
-}
-
-/// 追加 payload 到帧缓冲。首笔须以 SOI(`ff d8`) 开头(padding 包跳过)。
-fn append(
-    jpeg_len: &mut usize,
-    saw_data: &mut bool,
-    payload: &[u8],
-    jpeg_cap: usize,
-) -> UsbResult<()> {
-    if payload.is_empty() {
-        return Ok(());
-    }
-    if !*saw_data && !payload.starts_with(&[0xff, 0xd8]) {
-        return Ok(()); // padding 包:跳过
-    }
-    if *jpeg_len + payload.len() > jpeg_cap {
-        return Err(UsbError::Hardware("video assemble overflow"));
-    }
-    dwc2::dma_write_at(UVC_ASSEMBLED_JPEG_DMA_OFF + *jpeg_len, payload)?;
-    *jpeg_len += payload.len();
-    *saw_data = true;
-    Ok(())
 }
 
 impl UvcCamera {
@@ -136,7 +133,7 @@ impl UvcCamera {
         let mut fid = frame_fid;
 
         // 首包:刚翻转,直接追加。首包就可能带 EOF(单包帧)。
-        append(&mut jpeg_len, &mut saw_data, first.payload(), jpeg_cap)?;
+        first.append(&mut jpeg_len, &mut saw_data, jpeg_cap)?;
         if first.eof() && saw_data && tail_is_eoi(jpeg_len) {
             LAST_EOF_FID.store(frame_fid, Ordering::Relaxed);
             return Ok(jpeg_len);
@@ -163,7 +160,7 @@ impl UvcCamera {
                 saw_data = false;
             }
 
-            append(&mut jpeg_len, &mut saw_data, p.payload(), jpeg_cap)?;
+            p.append(&mut jpeg_len, &mut saw_data, jpeg_cap)?;
 
             // EOF + EOI = 帧完整;EOF 无 EOI = 残帧。
             if p.eof() && saw_data && tail_is_eoi(jpeg_len) {
