@@ -17,16 +17,10 @@ pub fn wmax_mps(mps_raw: u16) -> u32 {
     (mps_raw & 0x7FF) as u32
 }
 
-/// `wMaxPacketSize` 原始值 → mult（高带宽事务数，1..=3）。
-#[inline]
-pub fn wmax_mult(mps_raw: u16) -> u32 {
-    ((mps_raw >> 11) & 0x3) as u32 + 1
-}
-
-/// 每微帧总吞吐 = mps × mult。
+/// 每微帧最大接收字节数。SG2002 DWC2 只支持 mult=1——即 mps 本身。
 #[inline]
 pub fn wmax_payload_per_uframe(mps_raw: u16) -> u32 {
-    wmax_mps(mps_raw).saturating_mul(wmax_mult(mps_raw))
+    wmax_mps(mps_raw)
 }
 
 /// 等时（Isochronous）IN 视频端点句柄：绑定设备地址 / 端点号 / `wMaxPacketSize`。
@@ -54,61 +48,39 @@ impl IsochInEp {
         }
     }
 
-    /// 本端点的 HCCHAR(IN 方向)。参数为本次会话的单事务包长与
-    /// 每微帧事务数(高带宽倍数)。
-    fn hcchar(
-        &self,
-        max_packet_size: u32,
-        transactions_per_uframe: u32,
-    ) -> FieldValue<u32, HCCHAR::Register> {
+    /// 本端点的 HCCHAR(IN 方向;MC=1——单事务/微帧)。
+    fn hcchar(&self, max_packet_size: u32) -> FieldValue<u32, HCCHAR::Register> {
         HCCHAR::MPS.val(max_packet_size)
             + HCCHAR::EPNUM.val(self.ep_num)
             + HCCHAR::DEVADDR.val(self.dev)
             + HCCHAR::EPTYPE::Isochronous
-            + HCCHAR::MC.val(transactions_per_uframe.clamp(1, 3))
+            + HCCHAR::MC.val(1)
             // 等时 IN:方向恒 IN(视频流)
             + HCCHAR::EPDIR::SET
     }
 
-    /// 在 **下一微帧** 启动一次通道，最多接收 `transactions_per_uframe` 个
-    /// USB 事务（每个 ≤ `max_packet_size` 字节）。
+    /// 在 **下一微帧** 启动一次通道(mult=1:单事务,DATA0,PKTCNT=1)。
     ///
     /// 返回本次实际收到的字节数（0 表示设备本微帧无数据 / 0-byte 包）。
-    ///
-    /// **PID 编码（DWC2）**：单事务 DATA0；双事务 DATA1；三事务 DATA2。
-    /// **MC**：写入 `HCCHAR.MC` = 每微帧事务数。
     /// **ODDFRM**：根据 `HFNUM` 选择下个微帧的奇偶。
-    ///
-    /// # 参数
-    /// - `dma_off`：本微帧接收缓冲在内部 DMA 窗口中的起始偏移。
     pub fn read_uframe(&self, dma_off: usize) -> UsbResult<usize> {
         let max_packet_size = wmax_mps(self.mps_raw);
-        let transactions_per_uframe = wmax_mult(self.mps_raw);
-        if max_packet_size == 0 || transactions_per_uframe > 3 {
+        if max_packet_size == 0 {
             return Err(UsbError::Protocol("bad isoch mps_raw"));
         }
-        let transfer_size = max_packet_size.saturating_mul(transactions_per_uframe);
+        let transfer_size = max_packet_size;
         if (transfer_size as usize) > UVC_BULK_DMA_CAP {
             return Err(UsbError::Protocol("isoch xfer > dma cap"));
         }
-        // 每微帧事务数决定首发 PID(高带宽连发的第一包)。
-        let pid = match transactions_per_uframe {
-            3 => HCTSIZ::PID::Data2,
-            2 => HCTSIZ::PID::Data1,
-            _ => HCTSIZ::PID::Data0,
-        };
 
         let hctsiz =
-            pid + HCTSIZ::PKTCNT.val(transactions_per_uframe) + HCTSIZ::XFERSIZE.val(transfer_size);
+            HCTSIZ::PID::Data0 + HCTSIZ::PKTCNT.val(1) + HCTSIZ::XFERSIZE.val(transfer_size);
         let odd_frame = next_uframe_oddfrm();
 
         let channel = Channel::VIDEO;
         channel.arm(
             hctsiz,
-            (self.hcchar(max_packet_size, transactions_per_uframe)
-                + odd_frame
-                + HCCHAR::CHENA::SET)
-                .value,
+            (self.hcchar(max_packet_size) + odd_frame + HCCHAR::CHENA::SET).value,
             dma_off as u32,
         )?;
 

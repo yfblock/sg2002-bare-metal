@@ -335,28 +335,21 @@ impl IsochCandidates {
         let attr = d.u8(3)?;
         let mps_raw = d.u16le(4)?;
         let mps = dwc2::wmax_mps(mps_raw);
-        let mult = dwc2::wmax_mult(mps_raw);
         let xfer = attr & 0x03;
         if (ep_addr & 0x80) == 0 {
             return Some(()); // 只关心 IN
         }
         let ep_num = ep_addr & 0x0F;
-        let total = mps as u32 * mult as u32;
-        log::info!("UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind={} mps={mps} mult={mult} total={total}/uframe mps_raw={mps_raw:#06x}",
+        log::info!("UVC: VS-cand if={cur_ifc_num} alt={cur_alt} ep={ep_num} kind={} mps={mps} total={mps}/uframe mps_raw={mps_raw:#06x}",
             if xfer == ENDPOINT_ATTR_ISOCH { "Isoch" } else { "Other" });
         if xfer == ENDPOINT_ATTR_ISOCH {
             let tak = (cur_alt, ep_num, mps_raw, cur_ifc_num);
             let payload = dwc2::wmax_payload_per_uframe(mps_raw);
-            // (mult==1, payload) 字典序:mult=1 候选优先（DWC2 兼容），同档比吞吐。
+            // payload 最大者优先(mult 恒为 1:reselect 只选 mult=1 alt)。
             self.best = Some(match self.best {
                 None => tak,
                 Some(b) => {
-                    if (mult == 1, payload)
-                        > (
-                            dwc2::wmax_mult(b.2) == 1,
-                            dwc2::wmax_payload_per_uframe(b.2),
-                        )
-                    {
+                    if payload > dwc2::wmax_payload_per_uframe(b.2) {
                         tak
                     } else {
                         b
@@ -504,17 +497,10 @@ impl UvcStreamSelection {
         let alts = &self.isoch_alts[..self.isoch_alts_count as usize];
         let mut best_fit: Option<(u8, u16, u32)> = None;
         let mut best_max: Option<(u8, u16, u32)> = None;
-        // **DWC2 兼容性**：SG2002 等低端 DWC2 不可靠支持 HS 高带宽 Isoch（mult > 1），
-        // 传输能完成但数据内容错误——只考虑 mult=1 候选；若设备协商的 payload 超过
-        // mult=1 最大带宽，仍选最大 alt，摄像头会自适应降低每微帧吞吐（帧传输
-        // 耗时更长但数据正确）。
+        // SG2002 DWC2 只支持 mult=1:total = mps。
+        // 若设备协商的 payload 超过最大带宽,仍选最大 alt——摄像头自适应。
         for &(alt, mps_raw) in alts {
-            let mps = dwc2::wmax_mps(mps_raw);
-            let mult = dwc2::wmax_mult(mps_raw);
-            if mult > 1 {
-                continue;
-            }
-            let total = mps * mult;
+            let total = dwc2::wmax_mps(mps_raw);
             if total >= need {
                 let pick = (alt, mps_raw, total);
                 best_fit = Some(match best_fit {
